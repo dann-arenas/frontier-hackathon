@@ -1,13 +1,25 @@
-*.pyc
+# Environment & secrets
 .env
-.pytest_cache/
+.env.*
+
+# Virtual environments & Python cache
 .venv/
-FORMAT.md
+venv/
 __pycache__/
-fuentes/
-logs/
-output/
-sample.zip
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Data, state, outputs & logs (NEVER commit real PII or runtime state)
 sample/
+sample.zip
+fuentes/
+tests_public.json
+output/
 state/
-tmp_raw_output/
+logs/
+
+# OS
+.DS_Store

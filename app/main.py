@@ -1,0 +1,136 @@
+"""FastAPI participant service exposing `/v1` (and root aliases) for Frontier PII evaluation."""
+from __future__ import annotations
+
+import asyncio
+import json
+from typing import Any, Literal
+
+from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel, Field
+
+from app.config import OUTPUT_DIR, TEAM_NAME, VERSION, get_active_models
+from app.jobs import create_and_launch_job, read_job
+from app.pipeline import LiveAnonymizer
+
+app = FastAPI(
+    title="Reto PII - Kipu Pay Anonymization Service",
+    version=VERSION,
+)
+
+router = APIRouter()
+live_anonymizer = LiveAnonymizer()
+
+VALID_OUTPUT_FILES = ("chats.jsonl", "docs.jsonl", "tables.jsonl", "entities.json")
+
+
+class RunRequest(BaseModel):
+    sources_url: str
+    token: str
+
+
+class AnonymizeRequest(BaseModel):
+    source: Literal["chats", "docs", "tables"]
+    records: list[dict[str, Any]] = Field(..., max_length=50)
+
+
+def _validate_records_schema(source: str, records: list[dict[str, Any]]) -> None:
+    if not isinstance(records, list) or len(records) > 50:
+        raise HTTPException(status_code=422, detail="records must be a list of at most 50 items")
+
+    for idx, rec in enumerate(records):
+        if not isinstance(rec, dict):
+            raise HTTPException(status_code=422, detail=f"records[{idx}] must be an object")
+        if source == "chats":
+            req = ("id", "thread_id", "author", "ts", "text", "attachments")
+            for k in req:
+                if k not in rec:
+                    raise HTTPException(status_code=422, detail=f"chats record[{idx}] missing '{k}'")
+            if not isinstance(rec["id"], str) or not isinstance(rec["text"], str):
+                raise HTTPException(status_code=422, detail=f"chats record[{idx}] invalid field types")
+            if not isinstance(rec["attachments"], list):
+                raise HTTPException(status_code=422, detail=f"chats record[{idx}] attachments must be list")
+        elif source == "docs":
+            req = ("id", "format", "filename", "title", "body", "metadata")
+            for k in req:
+                if k not in rec:
+                    raise HTTPException(status_code=422, detail=f"docs record[{idx}] missing '{k}'")
+            if rec["format"] not in ("pdf", "html", "md"):
+                raise HTTPException(status_code=422, detail=f"docs record[{idx}] invalid format")
+            if not isinstance(rec["metadata"], dict):
+                raise HTTPException(status_code=422, detail=f"docs record[{idx}] metadata must be object")
+        elif source == "tables":
+            req = ("id", "table", "columns")
+            for k in req:
+                if k not in rec:
+                    raise HTTPException(status_code=422, detail=f"tables record[{idx}] missing '{k}'")
+            if rec["table"] not in ("clientes", "transacciones", "pqrs", "empleados"):
+                raise HTTPException(status_code=422, detail=f"tables record[{idx}] invalid table")
+            if not isinstance(rec["columns"], dict):
+                raise HTTPException(status_code=422, detail=f"tables record[{idx}] columns must be object")
+
+
+@router.get("/health")
+async def health() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "team": TEAM_NAME,
+        "version": VERSION,
+        "models": get_active_models(),
+    }
+
+
+@router.post("/run", status_code=202)
+async def start_run(body: RunRequest) -> JSONResponse:
+    job_id = create_and_launch_job(body.sources_url, body.token)
+    return JSONResponse(status_code=202, content={"job_id": job_id})
+
+
+@router.get("/run/{job_id}")
+async def get_run_status(job_id: str) -> dict[str, Any]:
+    job = read_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+@router.get("/output/{archivo}")
+async def get_output_file(archivo: str) -> FileResponse:
+    if archivo not in VALID_OUTPUT_FILES:
+        raise HTTPException(status_code=404, detail="Invalid output filename")
+    fpath = OUTPUT_DIR / archivo
+    if not fpath.exists():
+        raise HTTPException(status_code=404, detail="No completed run output available")
+    media_type = (
+        "application/json; charset=utf-8"
+        if archivo.endswith(".json")
+        else "application/x-ndjson; charset=utf-8"
+    )
+    return FileResponse(path=fpath, media_type=media_type, filename=archivo)
+
+
+@router.post("/anonymize")
+async def anonymize_records(body: AnonymizeRequest) -> dict[str, Any]:
+    _validate_records_schema(body.source, body.records)
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(live_anonymizer.anonymize, body.source, body.records),
+            timeout=45.0,
+        )
+        return result
+    except asyncio.TimeoutError:
+        # Fallback synchronous deterministic execution if thread timed out
+        return live_anonymizer.anonymize(body.source, body.records)
+
+
+@router.get("/entities")
+async def get_entities() -> dict[str, Any]:
+    fpath = OUTPUT_DIR / "entities.json"
+    if not fpath.exists():
+        raise HTTPException(status_code=404, detail="No completed run entities available")
+    return json.loads(fpath.read_text(encoding="utf-8"))
+
+
+# Mount under `/v1` (official OpenAPI server base) and root `/` (in case entrypoint is registered with or without `/v1`)
+app.include_router(router, prefix="/v1")
+app.include_router(router, prefix="")

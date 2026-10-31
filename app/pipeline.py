@@ -1,0 +1,605 @@
+"""Shared pipeline orchestrator for `/v1/run`, `make regen`, `make score-sample`, and `POST /v1/anonymize`."""
+from __future__ import annotations
+
+import copy
+import json
+from pathlib import Path
+import re
+import time
+from typing import Any
+
+from app.config import OUTPUT_DIR, STATE_DIR
+from app.detect.known import KnownAutomaton
+from app.exporter import export_entities
+from app.guard import run_final_guard
+from app.link import build_and_link_registry, split_colombian_name
+from app.normalize import norm, solo_digitos
+from app.pseudonym import PseudonymLedger, infer_gender
+from app.quasi import generalize_occupation, generalize_quasi_in_text, generalize_table_barrio
+from app.registry import EntityRegistry, PersonEntity
+from app.render import apply_resolved_spans
+from app.resolve import ResolutionContext, _ensure_person_pseudonyms, resolve_text_spans
+from app.sources import CorpusBundle, load_from_local_dir
+from app.telemetry import log_step
+
+
+def _collect_doc_participants(d: dict[str, Any], reg: EntityRegistry) -> list[PersonEntity]:
+    participants: list[PersonEntity] = []
+    full_txt = f"{d.get('filename', '')}\n{d.get('title', '')}\n{d.get('body', '')}\n" + "\n".join(
+        str(v) for v in (d.get("metadata") or {}).values()
+    )
+    txt_norm = norm(full_txt)
+
+    # Check explicit IDs (CL-..., KP-..., PQR-..., S-26...)
+    for m in re.finditer(r"\b((?:CL|KP)-\d+|PQR-\d{4}-\d{4}|S-\d{4}-\d{2})\b", full_txt):
+        tok = m.group(1)
+        p = (
+            reg.persons.get(tok)
+            or reg.by_pqr.get(tok)
+            or reg.by_solicitud.get(tok)
+        )
+        if p and p not in participants:
+            participants.append(p)
+
+    # Check full names, emails, cedulas, and @handles
+    for p in reg.persons.values():
+        if p in participants:
+            continue
+        if p.full_name and len(p.full_name.split()) >= 3 and norm(p.full_name) in txt_norm:
+            participants.append(p)
+            continue
+        if p.email and p.email.lower() in full_txt.lower():
+            participants.append(p)
+            continue
+        if p.cedula and len(p.cedula) >= 6 and p.cedula in solo_digitos(full_txt):
+            participants.append(p)
+            continue
+        for h in p.handles:
+            if f"@{h.lower()}" in full_txt.lower():
+                participants.append(p)
+                break
+        if p.short_name:
+            cands = reg.by_short_name_norm.get(norm(p.short_name), [])
+            if len(cands) == 1 and norm(p.short_name) in txt_norm:
+                participants.append(p)
+
+    return participants
+
+
+def _anonymize_tables_in_place(
+    tables: list[dict[str, Any]],
+    reg: EntityRegistry,
+    automaton: KnownAutomaton,
+    ledger: PseudonymLedger,
+) -> None:
+    for r in tables:
+        rid = str(r.get("id", ""))
+        tname = str(r.get("table", ""))
+        cols = r.get("columns")
+        if not isinstance(cols, dict):
+            continue
+
+        if tname == "clientes":
+            cid = cols.get("cliente_id", "").strip() or rid.split(":", 1)[-1]
+            p = reg.persons.get(cid)
+            if p is None:
+                orig_name = cols.get("nombre_completo", "").strip()
+                g, s1, s2, short = split_colombian_name(orig_name)
+                p = PersonEntity(
+                    canonical_id=cid,
+                    entity_id=cid,
+                    full_name=orig_name,
+                    short_name=short,
+                    given_name=g,
+                    surname1=s1,
+                    surname2=s2,
+                    gender=infer_gender(orig_name),
+                    cedula=solo_digitos(cols.get("num_doc", "")),
+                    email=cols.get("correo", "").strip().lower(),
+                    phone=solo_digitos(cols.get("celular", ""))[-10:],
+                    ciudad=cols.get("ciudad", "").strip(),
+                    barrio=cols.get("barrio", "").strip(),
+                    address=cols.get("direccion", "").strip(),
+                    birth_iso=cols.get("fecha_nacimiento", "").strip(),
+                    vinculacion_iso=cols.get("fecha_vinculacion", "").strip(),
+                    ocupacion=cols.get("ocupacion", "").strip(),
+                )
+                _ensure_person_pseudonyms(p, ledger)
+                reg.add_or_update_person(p)
+            else:
+                _ensure_person_pseudonyms(p, ledger)
+
+            ps = p.pseudonyms
+            if cols.get("nombre_completo"):
+                orig_n = cols["nombre_completo"]
+                p.record_hit(rid, orig_n, "name")
+                cols["nombre_completo"] = ps["full_name"] if len(orig_n.split()) >= 3 else ps["short_name"]
+            if cols.get("num_doc"):
+                p.record_hit(rid, cols["num_doc"], "cedula")
+                cols["num_doc"] = ps["cedula"]
+            if cols.get("correo"):
+                p.record_hit(rid, cols["correo"], "email")
+                cols["correo"] = ps["email"]
+            if cols.get("celular"):
+                p.record_hit(rid, cols["celular"], "phone")
+                cols["celular"] = ps["phone"]
+            if cols.get("direccion"):
+                p.record_hit(rid, cols["direccion"], "address")
+                cols["direccion"] = ps["address"]
+            if cols.get("fecha_nacimiento"):
+                p.record_hit(rid, cols["fecha_nacimiento"], "birth_iso")
+                cols["fecha_nacimiento"] = ps["birth_iso"]
+            if cols.get("barrio"):
+                cols["barrio"] = generalize_table_barrio(cid, cols.get("ciudad", ""), cols["barrio"])
+            if cols.get("ocupacion"):
+                cols["ocupacion"] = generalize_occupation(cols["ocupacion"])
+            if cols.get("notas"):
+                ctx = ResolutionContext(
+                    record_id=rid,
+                    source_type="tables",
+                    channel_or_table="clientes",
+                    field_name="columns.notas",
+                    row_person=p,
+                )
+                spans = resolve_text_spans(cols["notas"], reg, automaton, ledger, ctx)
+                cols["notas"] = apply_resolved_spans(cols["notas"], spans, rid)
+                cols["notas"] = generalize_quasi_in_text(cols["notas"], rid, "tables", person=p)
+
+        elif tname == "empleados":
+            eid = cols.get("id", "").strip() or rid.split(":", 1)[-1]
+            p = reg.persons.get(eid)
+            if p is None:
+                orig_name = cols.get("nombre", "").strip()
+                g, s1, s2, short = split_colombian_name(orig_name)
+                p = PersonEntity(
+                    canonical_id=eid,
+                    entity_id=eid,
+                    is_employee=True,
+                    full_name=orig_name,
+                    short_name=short,
+                    given_name=g,
+                    surname1=s1,
+                    surname2=s2,
+                    gender=infer_gender(orig_name),
+                    cedula=solo_digitos(cols.get("documento", "") or cols.get("cedula", "")),
+                    email=cols.get("correo", "").strip().lower(),
+                    phone=solo_digitos(cols.get("celular", ""))[-10:],
+                    ciudad=cols.get("ciudad", "").strip(),
+                    birth_iso=cols.get("fecha_nacimiento", "").strip(),
+                    vinculacion_iso=cols.get("ingreso", "").strip(),
+                    cargo=cols.get("cargo", "").strip(),
+                    reporta_a=cols.get("reporta_a", "").strip(),
+                )
+                _ensure_person_pseudonyms(p, ledger)
+                reg.add_or_update_person(p)
+            else:
+                _ensure_person_pseudonyms(p, ledger)
+
+            ps = p.pseudonyms
+            if cols.get("nombre"):
+                orig_n = cols["nombre"]
+                p.record_hit(rid, orig_n, "name")
+                cols["nombre"] = ps["full_name"] if len(orig_n.split()) >= 3 else ps["short_name"]
+            for doc_k in ("documento", "cedula"):
+                if cols.get(doc_k):
+                    p.record_hit(rid, cols[doc_k], "cedula")
+                    cols[doc_k] = ps["cedula"]
+            if cols.get("correo"):
+                p.record_hit(rid, cols["correo"], "email")
+                cols["correo"] = ps["email"]
+            if cols.get("celular"):
+                p.record_hit(rid, cols["celular"], "phone")
+                cols["celular"] = ps["phone"]
+            if cols.get("fecha_nacimiento"):
+                p.record_hit(rid, cols["fecha_nacimiento"], "birth_iso")
+                cols["fecha_nacimiento"] = ps["birth_iso"]
+            if cols.get("reporta_a"):
+                orig_mgr = cols["reporta_a"].strip()
+                mgr_n = norm(orig_mgr)
+                mgr_cands = [
+                    c
+                    for c in (reg.by_short_name_norm.get(mgr_n, []) + reg.by_full_name_norm.get(mgr_n, []))
+                    if c.is_employee
+                ]
+                if mgr_cands:
+                    mgr = mgr_cands[0]
+                    _ensure_person_pseudonyms(mgr, ledger)
+                    mgr.record_hit(rid, orig_mgr, "name")
+                    cols["reporta_a"] = mgr.pseudonyms["short_name"]
+
+        elif tname == "pqrs":
+            cid = cols.get("cliente_id", "").strip()
+            ced = solo_digitos(cols.get("cedula", ""))
+            p = reg.persons.get(cid) or reg.by_cedula.get(ced)
+            if p is not None:
+                _ensure_person_pseudonyms(p, ledger)
+                if cols.get("cedula"):
+                    p.record_hit(rid, cols["cedula"], "cedula")
+                    cols["cedula"] = p.pseudonyms["cedula"]
+                else:
+                    p.record_hit(rid, None, "name")
+            if cols.get("agente"):
+                orig_ag = cols["agente"].strip()
+                ag_cands = reg.by_handle.get(norm(orig_ag), [])
+                if ag_cands:
+                    ag = ag_cands[0]
+                    _ensure_person_pseudonyms(ag, ledger)
+                    ag.record_hit(rid, orig_ag, "handle")
+                    cols["agente"] = ag.pseudonyms["handle"]
+            for txt_k in ("descripcion", "respuesta"):
+                if cols.get(txt_k):
+                    ctx = ResolutionContext(
+                        record_id=rid,
+                        source_type="tables",
+                        channel_or_table="pqrs",
+                        field_name=f"columns.{txt_k}",
+                        row_person=p,
+                    )
+                    spans = resolve_text_spans(cols[txt_k], reg, automaton, ledger, ctx)
+                    cols[txt_k] = apply_resolved_spans(cols[txt_k], spans, rid)
+                    cols[txt_k] = generalize_quasi_in_text(cols[txt_k], rid, "tables", person=p)
+
+        elif tname == "transacciones":
+            cid = cols.get("cliente_id", "").strip()
+            p = reg.persons.get(cid)
+            if cols.get("descripcion"):
+                ctx = ResolutionContext(
+                    record_id=rid,
+                    source_type="tables",
+                    channel_or_table="transacciones",
+                    field_name="columns.descripcion",
+                    row_person=p,
+                )
+                spans = resolve_text_spans(cols["descripcion"], reg, automaton, ledger, ctx)
+                cols["descripcion"] = apply_resolved_spans(cols["descripcion"], spans, rid)
+
+
+def _anonymize_chats_in_place(
+    chats: list[dict[str, Any]],
+    reg: EntityRegistry,
+    automaton: KnownAutomaton,
+    ledger: PseudonymLedger,
+) -> None:
+    # 1. Group by thread_id to identify thread_client and thread_agents
+    thread_clients: dict[str, PersonEntity] = {}
+    thread_agents: dict[str, list[PersonEntity]] = {}
+
+    for c in chats:
+        tid = str(c.get("thread_id", ""))
+        uid = str(c.get("_uid", ""))
+        p = reg.by_uid.get(uid) if uid else None
+        if p is None and c.get("author"):
+            auth_n = norm(str(c["author"]))
+            cands = reg.by_short_name_norm.get(auth_n) or reg.by_full_name_norm.get(auth_n)
+            if cands and len(cands) == 1:
+                p = cands[0]
+        if p is not None:
+            if p.is_employee:
+                ag_list = thread_agents.setdefault(tid, [])
+                if p not in ag_list:
+                    ag_list.append(p)
+            else:
+                thread_clients[tid] = p
+
+    # 2. Process each chat message
+    for c in chats:
+        rid = str(c.get("id", ""))
+        tid = str(c.get("thread_id", ""))
+        chan = tid.split(":", 1)[0] if ":" in tid else ""
+        uid = str(c.get("_uid", ""))
+        orig_author = str(c.get("author", "")).strip()
+
+        author_p = reg.by_uid.get(uid) if uid else None
+        if author_p is None and orig_author and norm(orig_author) not in (
+            "kipi",
+            "kipu bot",
+            "usuario eliminado",
+            "cliente",
+            "usuario",
+            "agente",
+            "soporte",
+            "sistema",
+        ):
+            auth_n = norm(orig_author)
+            cands = reg.by_short_name_norm.get(auth_n) or reg.by_full_name_norm.get(auth_n)
+            if cands:
+                tc_cand = thread_clients.get(tid)
+                if tc_cand in cands:
+                    author_p = tc_cand
+                else:
+                    author_p = cands[0]
+            else:
+                # Register unseen author on the fly (for `/v1/anonymize`)
+                g, s1, s2, short = split_colombian_name(orig_author)
+                cid = f"external:{norm(short)}"
+                author_p = reg.persons.get(cid)
+                if author_p is None:
+                    author_p = PersonEntity(
+                        canonical_id=cid,
+                        entity_id=cid,
+                        full_name=orig_author,
+                        short_name=short,
+                        given_name=g,
+                        surname1=s1,
+                        surname2=s2,
+                        gender=infer_gender(orig_author),
+                    )
+                    _ensure_person_pseudonyms(author_p, ledger)
+                    reg.add_or_update_person(author_p)
+                    automaton = KnownAutomaton(reg)
+
+        if orig_author in ("Kipi", "Kipu Bot"):
+            kept_kipi = reg.kept.get("kept_kipi")
+            if kept_kipi is not None:
+                kept_kipi.record_hit(rid, orig_author)
+        elif author_p is not None:
+            _ensure_person_pseudonyms(author_p, ledger)
+            if orig_author and orig_author != "Usuario eliminado":
+                author_p.record_hit(rid, orig_author, "name")
+            else:
+                author_p.record_hit(rid, None, "name")
+            c["author"] = author_p.pseudonyms["short_name"]
+
+        tc = thread_clients.get(tid)
+        if tc is None and author_p is not None and not author_p.is_employee:
+            tc = author_p
+            thread_clients[tid] = tc
+
+        ctx = ResolutionContext(
+            record_id=rid,
+            source_type="chats",
+            channel_or_table=chan,
+            author_entity=author_p,
+            thread_client=tc,
+            thread_agents=thread_agents.get(tid, []),
+        )
+
+        txt = str(c.get("text", ""))
+        if txt:
+            spans = resolve_text_spans(txt, reg, automaton, ledger, ctx)
+            # If an unseen client self-introduced in text and author was a generic placeholder or matched
+            if tc is None:
+                for sp in spans:
+                    if sp.person is not None and not sp.person.is_employee:
+                        tc = sp.person
+                        thread_clients[tid] = tc
+                        break
+            txt_out = apply_resolved_spans(txt, spans, rid)
+            txt_out = generalize_quasi_in_text(txt_out, rid, "chats", person=tc or author_p)
+            c["text"] = txt_out
+
+        atts = c.get("attachments")
+        if isinstance(atts, list):
+            for att in atts:
+                if isinstance(att, dict) and att.get("filename"):
+                    fn = str(att["filename"])
+                    fn_spans = resolve_text_spans(fn, reg, automaton, ledger, ctx)
+                    att["filename"] = apply_resolved_spans(fn, fn_spans, rid)
+
+        # Strip internal keys so schema is strictly [id, thread_id, author, ts, text, attachments]
+        for k in list(c.keys()):
+            if k.startswith("_"):
+                del c[k]
+
+
+def _anonymize_docs_in_place(
+    docs: list[dict[str, Any]],
+    reg: EntityRegistry,
+    automaton: KnownAutomaton,
+    ledger: PseudonymLedger,
+) -> None:
+    for d in docs:
+        rid = str(d.get("id", ""))
+        participants = _collect_doc_participants(d, reg)
+        ctx = ResolutionContext(
+            record_id=rid,
+            source_type="docs",
+            doc_participants=participants,
+        )
+
+        for field_k in ("filename", "title"):
+            val = str(d.get(field_k, ""))
+            if val:
+                spans = resolve_text_spans(val, reg, automaton, ledger, ctx)
+                d[field_k] = apply_resolved_spans(val, spans, rid)
+
+        meta = d.get("metadata")
+        if isinstance(meta, dict):
+            for mk, mv in list(meta.items()):
+                if isinstance(mv, str) and mv:
+                    spans = resolve_text_spans(mv, reg, automaton, ledger, ctx)
+                    meta[mk] = apply_resolved_spans(mv, spans, rid)
+
+        body = str(d.get("body", ""))
+        if body:
+            spans = resolve_text_spans(body, reg, automaton, ledger, ctx)
+            body_out = apply_resolved_spans(body, spans, rid)
+            body_out = generalize_quasi_in_text(body_out, rid, "docs")
+            d["body"] = body_out
+
+
+def run_full_pipeline(
+    bundle: CorpusBundle,
+    output_dir: Path | None = None,
+    ledger_path: Path | None = None,
+    snapshot_path: Path | None = None,
+) -> dict[str, Any]:
+    """
+    Execute the complete deterministic + guard pipeline on `bundle` and write
+    `chats.jsonl`, `docs.jsonl`, `tables.jsonl`, and `entities.json` to `output_dir`.
+    """
+    t0 = time.perf_counter()
+    out_dir = output_dir or OUTPUT_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+    l_path = ledger_path or (STATE_DIR / "entity_ledger.json")
+    s_path = snapshot_path or (STATE_DIR / "registry_snapshot.json")
+
+    ledger = PseudonymLedger(ledger_path=l_path)
+    existing_reg = EntityRegistry(ledger=ledger)
+    if s_path.exists():
+        existing_reg.load_snapshot(s_path)
+
+    reg = build_and_link_registry(bundle, registry=existing_reg)
+
+    # Register all real identifiers so no generated pseudonym ever collides with a real value
+    ledger.register_real_corpus_identifiers(
+        cedulas={p.cedula for p in reg.persons.values() if p.cedula},
+        phones={p.phone for p in reg.persons.values() if p.phone},
+        emails={p.email for p in reg.persons.values() if p.email},
+        addresses={p.address for p in reg.persons.values() if p.address},
+        births={p.birth_iso for p in reg.persons.values() if p.birth_iso},
+    )
+
+    # Clear pre-render hit sets so `originals` and `records` reflect strictly what was rendered in output
+    for p in reg.persons.values():
+        _ensure_person_pseudonyms(p, ledger)
+        p.originals_found.clear()
+        p.records_found.clear()
+        p.attrs_used.clear()
+    for k in reg.kept.values():
+        k.originals_found.clear()
+        k.records_found.clear()
+
+    automaton = KnownAutomaton(reg)
+
+    chats = copy.deepcopy(bundle.chats)
+    docs = copy.deepcopy(bundle.docs)
+    tables = copy.deepcopy(bundle.tables)
+
+    _anonymize_tables_in_place(tables, reg, automaton, ledger)
+    # Rebuild automaton in case any dynamic table entity was added
+    automaton = KnownAutomaton(reg)
+    _anonymize_chats_in_place(chats, reg, automaton, ledger)
+    automaton = KnownAutomaton(reg)
+    _anonymize_docs_in_place(docs, reg, automaton, ledger)
+
+    all_records = chats + docs + tables
+    intercepts = run_final_guard(all_records, reg)
+    entities_list = export_entities(reg, all_records, for_anonymize=False)
+
+    # Persist state
+    ledger.save()
+    reg.save_snapshot(s_path)
+
+    # Write output files
+    (out_dir / "chats.jsonl").write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in chats) + "\n",
+        encoding="utf-8",
+    )
+    (out_dir / "docs.jsonl").write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in docs) + "\n",
+        encoding="utf-8",
+    )
+    (out_dir / "tables.jsonl").write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in tables) + "\n",
+        encoding="utf-8",
+    )
+    (out_dir / "entities.json").write_text(
+        json.dumps({"entities": entities_list}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    elapsed = round(time.perf_counter() - t0, 3)
+    log_step(
+        stage="write",
+        record="ALL",
+        mode="DET",
+        model="NONE",
+        latency_ms=elapsed * 1000.0,
+        guard="INTERCEPT" if intercepts > 0 else "PASS",
+        status="PASS",
+    )
+    return {
+        "records": {
+            "chats": len(chats),
+            "docs": len(docs),
+            "tables": len(tables),
+        },
+        "entities_count": len(entities_list),
+        "guard_intercepts": intercepts,
+        "seconds": elapsed,
+    }
+
+
+class LiveAnonymizer:
+    """
+    Stateful in-memory handler for `POST /v1/anonymize` that works both in cold start
+    (including `sample/` and `fuentes/`) and after `/v1/run`.
+    """
+
+    def __init__(self) -> None:
+        self.ledger_path = STATE_DIR / "entity_ledger.json"
+        self.snapshot_path = STATE_DIR / "registry_snapshot.json"
+        self.ledger = PseudonymLedger(ledger_path=self.ledger_path)
+        self.reg: EntityRegistry | None = None
+        self._last_snapshot_mtime: float = 0.0
+
+    def _ensure_loaded(self) -> EntityRegistry:
+        mtime = self.snapshot_path.stat().st_mtime if self.snapshot_path.exists() else 0.0
+        if self.reg is None or mtime > self._last_snapshot_mtime:
+            self.ledger.load()
+            if self.snapshot_path.exists():
+                self.reg = EntityRegistry(ledger=self.ledger)
+                self.reg.load_snapshot(self.snapshot_path)
+                self._last_snapshot_mtime = mtime
+            elif Path("fuentes").exists() and (Path("fuentes") / "record_index.json").exists():
+                b = load_from_local_dir(Path("fuentes"))
+                self.reg = build_and_link_registry(b, registry=EntityRegistry(ledger=self.ledger))
+            else:
+                self.reg = EntityRegistry(ledger=self.ledger)
+
+            # Also merge `sample/input` into live anonymizer lookup if present on disk
+            # so cold `VALIDAR ENTRYPOINT` checks on sample records resolve full sample context
+            sample_dir = Path("sample/input")
+            if sample_dir.exists():
+                sb = load_from_local_dir(sample_dir)
+                s_reg = build_and_link_registry(sb, registry=EntityRegistry(ledger=self.ledger))
+                for cid, sp in s_reg.persons.items():
+                    if cid not in self.reg.persons:
+                        _ensure_person_pseudonyms(sp, self.ledger)
+                        self.reg.add_or_update_person(sp)
+        return self.reg
+
+    def anonymize(self, source: str, records: list[dict[str, Any]]) -> dict[str, Any]:
+        base_reg = self._ensure_loaded()
+        # Clone registry per request so `originals_found` and `records_found` are scoped to this batch
+        batch_reg = copy.deepcopy(base_reg)
+        batch_reg.ledger = self.ledger
+        for p in batch_reg.persons.values():
+            _ensure_person_pseudonyms(p, self.ledger)
+            p.originals_found.clear()
+            p.records_found.clear()
+            p.attrs_used.clear()
+        for k in batch_reg.kept.values():
+            k.originals_found.clear()
+            k.records_found.clear()
+
+        recs_copy = copy.deepcopy(records)
+        automaton = KnownAutomaton(batch_reg)
+
+        if source == "tables":
+            _anonymize_tables_in_place(recs_copy, batch_reg, automaton, self.ledger)
+        elif source == "chats":
+            _anonymize_chats_in_place(recs_copy, batch_reg, automaton, self.ledger)
+        elif source == "docs":
+            _anonymize_docs_in_place(recs_copy, batch_reg, automaton, self.ledger)
+
+        run_final_guard(recs_copy, batch_reg)
+        entities_out = export_entities(batch_reg, recs_copy, for_anonymize=True)
+
+        # Persist any newly created dynamic persons back into `base_reg` and `self.ledger`
+        new_added = False
+        for cid, p in batch_reg.persons.items():
+            if cid not in base_reg.persons:
+                base_reg.add_or_update_person(copy.deepcopy(p))
+                new_added = True
+        if new_added:
+            self.ledger.save()
+
+        return {
+            "records": recs_copy,
+            "entities": entities_out,
+        }
+
+
+live_anonymizer = LiveAnonymizer()
