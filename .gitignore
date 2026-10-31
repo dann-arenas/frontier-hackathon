@@ -1,0 +1,13 @@
+*.pyc
+.env
+.pytest_cache/
+.venv/
+FORMAT.md
+__pycache__/
+fuentes/
+logs/
+output/
+sample.zip
+sample/
+state/
+tmp_raw_output/

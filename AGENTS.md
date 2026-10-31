@@ -1,9 +1,9 @@
 # AGENTS.md — Kipu Pay · Anonimización del corpus de soporte
 
-> Reto: "Vende los datos sin vender a la gente". La fuente de verdad son `RULES.md`, `api/fuentes.openapi.yaml`, `api/participante.openapi.yaml`, `validar.mjs` y `sample/`. Si este archivo los contradice, ganan ellos: corrige este archivo en el mismo commit. El diseño detallado está en `DESIGN.md`.
+> Reto: "Vende los datos sin vender a la gente". La fuente de verdad son `ENUNCIADO.md`, `api/fuentes.openapi.yaml`, `api/participante.openapi.yaml`, `validar.mjs` y `sample/`. Si este archivo los contradice, ganan ellos: corrige este archivo en el mismo commit. El diseño detallado está en `DESIGN.md`.
 
 ## 0. Antes de escribir código
-1. Lee `RULES.md`, `api/fuentes.openapi.yaml`, `api/participante.openapi.yaml` y `validar.mjs`.
+1. Lee `ENUNCIADO.md`, `api/fuentes.openapi.yaml`, `api/participante.openapi.yaml` y `validar.mjs`.
 2. Baja `sample.zip` y compara `sample/` con `sample/expected_output/`, además de inspeccionar `tests_public.json`. Es la referencia exacta de normalización (cómo salen `author`, `thread_id`, el `body` de PDF, HTML y MD, `metadata` y `columns`) y del estilo de los seudónimos. 10 puntos de utilidad miden el parecido con la salida ideal.
 3. Corre `node validar.mjs sample/expected_output --public sample`. Tiene que decir `OK: la salida pasa el validador`.
 4. **Nunca dispares `VALIDAR ENTRYPOINT`** en la plataforma de Frontier: solo hay 3 corridas oficiales y las activa únicamente un humano siguiendo §9.
@@ -37,7 +37,7 @@ Un servicio HTTP en una URL pública bajo raíz `/v1`, sin autenticación y todo
 | `make score-sample` | Corre el pipeline sobre `sample/` y mide fuga, parecido y entidades conservadas contra `sample/expected_output` |
 
 Variables de entorno (en `.env`, jamás en git):
-- `SOURCES_URL` (o alias `SOURCES_BASE_URL`) y `SOURCES_TOKEN`: para desarrollo local. En evaluación llegan en el body de `POST /v1/run`.
+- `SOURCES_URL` (o alias `SOURCES_URL`) y `SOURCES_TOKEN`: para desarrollo local. En evaluación llegan en el body de `POST /v1/run`.
 - `OPENROUTER_API_KEY`, `PSEUDONYM_SECRET`, `STATE_DIR` (disco persistente, default `state/`), `RUN_MODE` (`dev` o `eval`) y, opcional, `OPENROUTER_EVAL_KEY`.
 
 ## 3. Contratos Oficiales
@@ -88,7 +88,7 @@ tests/               # Solo datos sintéticos, más los tests públicos y los de
 output/              # Generado, gitignored
 state/               # STATE_DIR, gitignored: entity_ledger.json, caché cruda, llm_cache/
 logs/                # Sin valores reales, gitignored
-DESIGN.md · DECISIONS.md · README.md · RULES.md · failure_analysis.md
+DESIGN.md · DECISIONS.md · README.md · ENUNCIADO.md · failure_analysis.md
 ```
 
 ## 5. Reglas duras (Invariantes)
