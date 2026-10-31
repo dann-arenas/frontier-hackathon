@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Diseño de Sistema — Pipeline de Seudonimización Kipu Pay</title>
+<style>
+  @page { size: A4 portrait; margin: 5.5mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+    font-size: 7.55pt;
+    line-height: 1.21;
+    color: #111827;
+    background: #ffffff;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .page {
+    page-break-after: avoid;
+    page-break-inside: avoid;
+  }
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    border-bottom: 2px solid #111827;
+    padding-bottom: 4px;
+    margin-bottom: 5px;
+  }
+  .title { font-size: 11.8pt; font-weight: 800; letter-spacing: -0.3px; color: #111827; }
+  .subtitle { font-size: 7.5pt; color: #4b5563; font-weight: 500; }
+  .author {
+    font-size: 7.4pt; font-weight: 700; color: #111827;
+    border: 1px solid #111827; padding: 2px 6px; border-radius: 3px;
+    white-space: nowrap;
+  }
+  .grid-3 {
+    display: grid;
+    grid-template-columns: 1.02fr 1.13fr 0.95fr;
+    gap: 5px;
+    margin-bottom: 5px;
+  }
+  .box {
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    padding: 4.5px 6px;
+    background: #f9fafb !important;
+  }
+  h2 {
+    font-size: 8.1pt;
+    font-weight: 800;
+    text-transform: uppercase;
+    color: #111827;
+    border-left: 3px solid #111827;
+    padding-left: 5px;
+    margin-bottom: 3px;
+  }
+  h3 {
+    font-size: 7.5pt;
+    font-weight: 800;
+    color: #111827;
+    margin-bottom: 2px;
+    border-bottom: 1px solid #e5e7eb;
+    padding-bottom: 1px;
+  }
+  ul { padding-left: 11px; }
+  li { margin-bottom: 1.3px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 7.1pt;
+    margin-bottom: 5px;
+    page-break-inside: avoid;
+  }
+  th, td {
+    border: 1px solid #d1d5db;
+    padding: 2.6px 4.5px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: #111827 !important;
+    color: #ffffff !important;
+    font-weight: 700;
+    font-size: 7pt;
+  }
+  tr:nth-child(even) td { background: #f3f4f6 !important; }
+  .tag {
+    display: inline-block;
+    background: #e5e7eb !important;
+    color: #111827 !important;
+    font-weight: 700;
+    font-size: 6.5pt;
+    padding: 0.5px 3.5px;
+    border-radius: 3px;
+  }
+  .footer {
+    border-top: 1px solid #d1d5db;
+    padding-top: 3px;
+    font-size: 6.9pt;
+    color: #6b7280;
+    display: flex;
+    justify-content: space-between;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="header">
+    <div>
+      <div class="title">DISEÑO DE SISTEMA: SEUDONIMIZACIÓN Y RESOLUCIÓN DE ENTIDADES (KIPU PAY)</div>
+      <div class="subtitle">Objetivo: Anonimizar 1-a-1 el corpus multimodal (2.028 mensajes, 26 docs, 6.243 filas en 4 tablas) y operar /v1/anonymize sin fugas, conservando utilidad y consistencia.</div>
+    </div>
+    <div class="author">Dann Arenas</div>
+  </div>
+
+  <!-- CRITERIO 1: ENTENDIMIENTO DEL PROBLEMA -->
+  <h2>1. Entendimiento del Problema: Supuestos, Casos Difíciles y Límites (Fuera de Alcance)</h2>
+  <div class="grid-3">
+    <div class="box">
+      <h3>1.1 Supuestos y Decisiones Base</h3>
+      <ul>
+        <li><strong>S1 (Padrones Maestros como Ancla):</strong> <code>clientes.csv</code> (Latin-1, <code>;</code>) y <code>empleados.xml</code> (+ <code>users.json</code>) traen IDs estables (<code>CL-*</code>, <code>KP-*</code>) que permiten construir el registro canónico antes de tocar texto libre.</li>
+        <li><strong>S2 (Desempate en Fuentes Cruzadas):</strong> La ciudad o cargo no aparecen junto al nombre en el chat; las homónimas se desempatan cruzando radicados (<code>pqrs.xml</code>), fecha y monto (<code>transacciones.csv</code>) o adjuntos.</li>
+        <li><strong>S3 (El Juez es un Programa):</strong> <code>validar.mjs</code> normaliza confusables, invisibles, tildes, separadores de dígitos y el prefijo <code>57</code>. Nuestro guard es un port exacto y el validador corre dentro de <code>/v1/run</code> como compuerta, porque una salida inválida gasta la corrida sin puntaje.</li>
+        <li><strong>S4 (Crecimiento Incremental):</strong> El API sumará datos sin borrar los previos y el jurado compara <code>entities.json</code> antes y después. Un mapa persistido (<code>state/entity_ledger.json</code>) se carga antes de asignar; <code>HMAC(secret, canonical_id)</code> genera solo a las personas nuevas.</li>
+        <li><strong>S5 (Disponibilidad):</strong> Si el servicio deja de responder durante una corrida, la corrida se pierde: despliegue sin suspensión, con disco persistente, y <code>/run</code> en un proceso aparte para que <code>/health</code> siempre responda.</li>
+      </ul>
+    </div>
+    <div class="box">
+      <h3>1.2 Casos Difíciles (Edge Cases)</h3>
+      <ul>
+        <li><strong>Homonimia y Jerarquía:</strong> 2 clientas con el mismo nombre completo, 1 agente que se llama igual que una clienta y relación <code>"reporta a"</code> entre empleados en <code>empleados.xml</code>.</li>
+        <li><strong>Personas Fuera del Autor:</strong> El bot dice el nombre completo del agente en el traspaso, los agentes repiten correos y celulares de clientes y el texto nombra a terceros; resolver solo por <code>user</code> filtra datos.</li>
+        <li><strong>PII Ofuscada y Canales Ocultos:</strong> Nombres en MAYÚSCULAS sin tildes en extractos, correos deletreados (<em>"arroba"/"punto"</em>), confusables e invisibles, metadatos PDF, comentarios HTML, 2 docs en inglés y nombres en <code>attachments.filename</code>.</li>
+        <li><strong>Apellidos = Lugares/Marcas y Razones Sociales:</strong> <em>"Sra. Restrepo"</em> se reemplaza, pero <em>"Barrio Restrepo"</em> o <em>"Seguros Bolívar"</em> se conservan. En <em>"Odontología María López SAS"</em> solo se seudonimiza el nombre propio.</li>
+        <li><strong>Cuasi-identificadores:</strong> Tuplas <code>(barrio, ocupación, año)</code> que señalan a una sola persona se generalizan en la unión de tabla y chat (ocupación &rarr; sector, barrio &rarr; ciudad, año &rarr; <em>"hace unos años"</em>).</li>
+      </ul>
+    </div>
+    <div class="box">
+      <h3>1.3 Qué Dejamos Fuera y Por Qué</h3>
+      <ul>
+        <li><strong>Reescritura de texto con LLM:</strong> Se deja fuera porque altera datos de negocio, destruye la similitud del texto no personal y no es determinista entre corridas (la misma persona podría recibir nombres distintos).</li>
+        <li><strong>Perturbar montos, fechas o llaves (<code>CL/TX/PQR</code>):</strong> Se excluye porque romper las llaves foráneas o cifras financieras destruye las uniones entre tablas y el valor para entrenar soporte.</li>
+        <li><strong>Privacidad diferencial formal (&epsilon;-DP):</strong> Descartada porque aplica a agregados estadísticos y rompe la entrega 1-a-1 registro por registro.</li>
+        <li><strong>Reversibilidad para el comprador:</strong> Se deja fuera por seguridad; el mapa real &rarr; seudónimo vive solo en <code>state/</code> del servidor para mantener consistencia en vivo.</li>
+        <li><strong>Contenido de los adjuntos (OCR):</strong> Fuera porque el contrato solo entrega y exige <code>filename</code>; el nombre del archivo sí se anonimiza como texto.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- CRITERIO 2: ARQUITECTURA Y TRADE-OFFS -->
+  <h2>2. Arquitectura y Trade-Offs (Componentes, Alternativas Descartadas y Por Qué)</h2>
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 15%;">Componente</th>
+        <th style="width: 22%;">Decisión Elegida</th>
+        <th style="width: 22%;">Alternativa Descartada</th>
+        <th style="width: 41%;">Por qué se descartó (Justificación Técnica)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Detección y Render</strong> (<code>known.py</code>, <code>llm.py</code>, <code>render.py</code>)</td>
+        <td>Aho-Corasick + Regex primero; el LLM solo devuelve spans JSON tipados y el código reemplaza con estilo espejo.</td>
+        <td>Pasar el texto completo al LLM para que lo reescriba o usar el LLM para detectar todo desde cero.</td>
+        <td>Reescribir inventa o borra datos de negocio y pierde parecido con la salida ideal, que reemplaza en lugar de redactar. Conocidos + regex atrapa de forma determinista y gratis lo que ya está en el padrón; según el enunciado, una solución por reglas llega a ~88 puntos, así que el LLM queda para terceros, apodos y casos ambiguos. Detectar solo el 70 % de las personas da 76: el recall manda.</td>
+      </tr>
+      <tr>
+        <td><strong>Resolución de Entidades</strong> (<code>registry.py</code>, <code>resolve.py</code>)</td>
+        <td>Seudónimo anclado al <code>canonical_id</code> cruzando las 4 tablas maestras + ID global <code>external:</code> para terceros.</td>
+        <td>Diccionario plano <code>nombre &rarr; seudónimo</code> o resolver únicamente por el campo <code>user</code> (autor del mensaje).</td>
+        <td>Un mapa por nombre fusiona a las dos clientas homónimas y a la agente homónima de una clienta. Resolver solo por autor falla porque el bot menciona al agente en el traspaso y los agentes repiten correos y celulares de clientes.</td>
+      </tr>
+      <tr>
+        <td><strong>Generador de Seudónimos</strong> (<code>pseudonym.py</code>)</td>
+        <td><code>Faker(es_CO)</code> sembrado con <code>HMAC(secret, canonical_id)</code> sobre un mapa persistido: las personas existentes conservan su seudónimo y las colisiones solo afectan a las nuevas.</td>
+        <td>SHA-256, <code>[REDACTED]</code>, un seudónimo por género, cambiar 1 letra o dígito, o pedir al LLM que invente nombres.</td>
+        <td>Puntajes medidos en el enunciado: hashear da 58 (la cédula se revierte por fuerza bruta), <code>[REDACTED]</code> da 56 (destruye quién habló con quién), un seudónimo por género da 70 (fusiona a 150 personas) y cambiar una letra o dígito da 41 (el barrido global lo cuenta como fuga). El LLM inventando nombres rompe la consistencia en vivo.</td>
+      </tr>
+      <tr>
+        <td><strong>Cuasi-Identificadores</strong> (<code>quasi.py</code>)</td>
+        <td>Solo cuando la tupla señala a una sola persona: ocupación a sector, barrio a ciudad y año a expresión, tanto en <code>clientes.csv</code> como en chats y documentos.</td>
+        <td>Desplazar el año al azar, borrar las columnas o generalizar únicamente dentro del texto del chat.</td>
+        <td>Desplazar un año único sigue dejando una fila única (<em>k</em>&nbsp;=&nbsp;1); borrar columnas viola el esquema 1-a-1; aplicarlo solo en el chat deja expuesta la fila en <code>clientes.csv</code>, y la indirecta se evalúa sobre la unión.</td>
+      </tr>
+      <tr>
+        <td><strong>Guard y Diccionario</strong> (<code>guard.py</code>, <code>exporter.py</code>)</td>
+        <td>Port de <code>contiene()</code> de <code>validar.mjs</code> + poda de <code>entities.json</code> a atributos usados, con el validador como compuerta dentro de <code>/v1/run</code>.</td>
+        <td>Guard basado solo en regex/entropía, exportar todos los atributos sintéticos, o validar solo a mano antes de la corrida.</td>
+        <td>Regex/entropía no ve nombres sin tildes ni dígitos con separadores raros. Un seudónimo declarado que no aparece en sus <code>records</code> hace fallar <code>validar.mjs</code>, y una salida inválida gasta la corrida sin puntaje. Durante una corrida oficial el jurado regenera la salida en nuestro servicio, así que la compuerta tiene que correr ahí.</td>
+      </tr>
+      <tr>
+        <td><strong>Servicio y Crecimiento</strong> (<code>main.py</code>, <code>jobs.py</code>)</td>
+        <td><code>/v1/run</code> asíncrono en un proceso aparte, ledger en disco persistente y <code>/anonymize</code> con corte a 45&nbsp;s y respaldo determinista.</td>
+        <td><code>/run</code> síncrono, seudónimos regenerados en cada corrida o esperar al LLM sin límite.</td>
+        <td>Si <code>/health</code> deja de responder durante una corrida, se pierde. Regenerar seudónimos rompe la comparación antes/después del crecimiento, que multiplica los puntos de consistencia. Esperar al LLM arriesga el límite de 60&nbsp;s por lote de 50.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- CRITERIO 3: PLAN PARA MEDIR -->
+  <h2>3. Plan para Medir (Casos de Prueba Pre-Construcción y Métricas Concretas desde el Diseño)</h2>
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 19%;">Caso de Prueba de Diseño</th>
+        <th style="width: 36%;">Cómo Sabemos si Funciona Antes de Construir (Input &rarr; Resultado Esperado)</th>
+        <th style="width: 23%;">Métrica Concreta</th>
+        <th style="width: 22%;">Umbral de Aprobación</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="tag">Test 1</span> Calibración en Muestra y Tests Públicos</td>
+        <td>Correr los 13 tests de <code>sample/</code> y los 5 de <code>tests_public.json</code>; comparar contra <code>sample/expected_output/</code> (forma, reemplazos, diccionario y parecido del texto no personal) y correr <code>node validar.mjs</code> sobre la muestra y sobre la salida completa.</td>
+        <td><code>Validator_Errors</code>, <code>Sample_Pass_Rate</code>, <code>Public_Pass_Rate</code> &amp; <code>Text_Similarity</code></td>
+        <td><strong>0 errores</strong> · <strong>13/13</strong> · <strong>5/5</strong> · parecido <strong>&ge; 98&nbsp;%</strong></td>
+      </tr>
+      <tr>
+        <td><span class="tag">Test 2</span> Superficies Ofuscadas y Ocultas</td>
+        <td>Inyectar extracto en <code>MAYUSCULAS SIN TILDES</code>, correo con <em>"arroba/punto"</em>, confusables cirílicos, caracteres invisibles, PDF con <code>/Author</code>, HTML con <code>&lt;!-- --&gt;</code> y adjunto con nombre propio.</td>
+        <td><code>Normalized_Leak_Count</code> (con <code>norm()</code> y <code>digitosEn()</code>)</td>
+        <td><strong>0 apariciones</strong> de formas reales en cuerpo, metadata y filenames</td>
+      </tr>
+      <tr>
+        <td><span class="tag">Test 3</span> Homónimas y Relación <code>reporta a</code></td>
+        <td>Dos clientas con igual nombre en chats distintos (una con <code>PQR-1</code>, otra con monto de <code>TX-2</code>) + agente homónima de una clienta + árbol de jefes en <code>empleados.xml</code>.</td>
+        <td><code>Homonym_Collision_Rate</code> &amp; <code>Hierarchy_Integrity</code></td>
+        <td>Clientas homónimas &rarr; <strong>2 seudónimos</strong>; agente &ne; clienta (<strong>0 fusiones</strong>) y <strong>100&nbsp;%</strong> vínculos <code>reporta a</code> válidos</td>
+      </tr>
+      <tr>
+        <td><span class="tag">Test 4</span> Colisión Apellido vs Lugar/Marca</td>
+        <td>Texto mixto con <em>"la señora Restrepo pagó en Bancolombia desde el Barrio Restrepo y Seguros Bolívar"</em>.</td>
+        <td><code>False_Positive_Entity_Rate</code> &amp; <code>Kept_Declaration</code></td>
+        <td>Reemplaza solo a la persona; conserva banco/barrio/marca con <code>kept: true</code> (<strong>&le; 2&nbsp;% FP</strong>)</td>
+      </tr>
+      <tr>
+        <td><span class="tag">Test 5</span> Cuasi-IDs + Estabilidad Incremental</td>
+        <td>1) Unificar fila <code>clientes.csv</code> + chat con <code>(barrio, ocupación, año)</code> única. 2) Re-correr <code>/v1/run</code> agregando registros nuevos y comparar <code>entities.json</code>.</td>
+        <td><code>Unique_Quasi_Tuples</code>, <code>Idempotency_Rate</code> &amp; <code>Batch50_p95</code></td>
+        <td><strong>0 tuplas únicas</strong> expuestas · <strong>100&nbsp;%</strong> mismos seudónimos previos · <strong>p95 &lt; 15&nbsp;s</strong></td>
+      </tr>
+      <tr>
+        <td><span class="tag">Test 6</span> Categoría del Seudónimo y Estructura</td>
+        <td>Generar seudónimos para todo el padrón; comparar las uniones <code>transacciones&rarr;clientes</code> y <code>pqrs&rarr;clientes</code> antes y después, y el grafo de participantes de cada hilo.</td>
+        <td><code>Gender_Match</code>, <code>Format_Valid</code>, <code>Shared_Tokens_With_Original</code>, <code>Join_Preservation</code> &amp; <code>Thread_Graph_Match</code></td>
+        <td><strong>100&nbsp;%</strong> mismo género y formato válido · <strong>0</strong> nombres, apellidos o dígitos compartidos con el original · <strong>100&nbsp;%</strong> uniones y grafos iguales</td>
+      </tr>
+      <tr>
+        <td><span class="tag">Test 7</span> Corrida 1 como Medición Real</td>
+        <td>Lanzar la corrida 1 en cuanto los Tests 1&ndash;6 pasen y antes del crecimiento de fuentes (vale el 30&nbsp;%); mide el 60&nbsp;% de los tests ocultos.</td>
+        <td><code>Score_Run1</code> y fallas por dimensión</td>
+        <td><strong>&ge; 88</strong> (referencia del enunciado para una solución por reglas sin modelos)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="footer">
+    <span>Stack: Python 3.11 · FastAPI · pyahocorasick · Faker (es_CO) con HMAC · Ledger persistido · Caché determinista por contenido</span>
+    <span>Kipu Pay Systems Design Document</span>
+  </div>
+
+</div>
+</body>
+</html>

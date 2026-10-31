@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Diagrama de Arquitectura y Decisiones — Kipu Pay</title>
+<style>
+  @page { size: A4 landscape; margin: 5mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+    background: #0b1120 !important;
+    color: #f8fafc !important;
+    padding: 12px 14px;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .page {
+    page-break-after: avoid;
+    page-break-inside: avoid;
+  }
+  .header {
+    display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid #334155; padding-bottom: 7px; margin-bottom: 9px;
+  }
+  .title { font-size: 13pt; font-weight: 800; color: #ffffff; }
+  .sub { font-size: 8pt; color: #94a3b8; }
+  .flow-wrapper {
+    display: grid;
+    grid-template-columns: 1fr 20px 1fr 20px 1fr 20px 1fr 20px 1fr;
+    align-items: stretch;
+  }
+  .arrow-col {
+    display: flex; align-items: center; justify-content: center;
+    color: #38bdf8; font-size: 14pt; font-weight: 900;
+  }
+  .col {
+    background: #1e293b !important;
+    border: 1px solid #334155;
+    border-radius: 7px;
+    padding: 7.5px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 5.5px;
+  }
+  .col-header {
+    font-size: 7.8pt; font-weight: 800; text-transform: uppercase;
+    color: #38bdf8; border-bottom: 1px solid #334155; padding-bottom: 3.5px;
+  }
+  .node {
+    background: #0f172a !important;
+    border: 1px solid #475569;
+    border-left: 3px solid #6366f1;
+    border-radius: 4px;
+    padding: 5px 6px;
+    font-size: 7.2pt;
+    line-height: 1.23;
+  }
+  .node.green { border-left-color: #10b981; }
+  .node.amber { border-left-color: #f59e0b; }
+  .node.rose { border-left-color: #f43f5e; }
+  .node-title { font-weight: 700; color: #e2e8f0; margin-bottom: 2px; font-size: 7.5pt; }
+  .node-desc { color: #cbd5e1; font-size: 6.95pt; }
+  .decision-diamond {
+    background: #172554 !important;
+    border: 1px dashed #60a5fa;
+    border-radius: 4px;
+    padding: 4.5px 5.5px;
+    font-size: 6.85pt;
+    color: #bfdbfe;
+    line-height: 1.22;
+  }
+  .decision-diamond strong { color: #93c5fd; display: block; margin-bottom: 1px; }
+  .tradeoff-box {
+    background: #090d16 !important;
+    border: 1px solid #374151;
+    border-top: 2px solid #a855f7;
+    border-radius: 4px;
+    padding: 4.5px 5.5px;
+    font-size: 6.75pt;
+    line-height: 1.2;
+    color: #d1d5db;
+  }
+  .tradeoff-title { color: #c084fc; font-weight: 800; font-size: 6.75pt; text-transform: uppercase; margin-bottom: 2px; }
+  .bottom-grid {
+    margin-top: 9px;
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 9px;
+  }
+  .bar-box {
+    background: #1e293b !important;
+    border: 1px solid #334155;
+    border-radius: 7px;
+    padding: 7.5px 9.5px;
+    font-size: 7.3pt;
+    line-height: 1.28;
+  }
+  .bar-title { font-weight: 800; color: #38bdf8; margin-bottom: 2.5px; text-transform: uppercase; font-size: 7.6pt; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="header">
+    <div>
+      <div class="title">DIAGRAMA DE ARQUITECTURA Y DECISIONES TÉCNICAS — PIPELINE KIPU PAY</div>
+      <div class="sub">Cada etapa documenta el flujo de datos, las compuertas lógicas de decisión y la alternativa técnica descartada</div>
+    </div>
+    <div style="text-align:right; font-size:7.8pt; color:#94a3b8; font-weight:700;">
+      Dann Arenas · Systems Design
+    </div>
+  </div>
+
+  <div class="flow-wrapper">
+    <!-- ETAPA 1 -->
+    <div class="col">
+      <div>
+        <div class="col-header">1. Ingesta &amp; Normalización</div>
+        <div class="node" style="margin-top:4.5px;">
+          <div class="node-title">API Fuentes (/v1 + ETag)</div>
+          <div class="node-desc">Descarga a <code>state/raw/</code> verificando cada id contra <code>record_index</code> (8.297 hoy; crece sin aviso).</div>
+        </div>
+        <div class="node" style="margin-top:4.5px;">
+          <div class="node-title">Parsers con Preservación de Claves</div>
+          <div class="node-desc">• <code>clientes.csv</code> (Latin-1, <code>;</code>) &amp; <code>transacciones.csv</code> (UTF-8)<br>• <code>pqrs.xml</code> &amp; <code>empleados.xml</code><br>• 11 PDF (texto+meta), 6 HTML (<code>&lt;!-- --&gt;</code>), 9 MD.</div>
+        </div>
+        <div class="decision-diamond" style="margin-top:4.5px;">
+          <strong>&loz; Compuerta de Crecimiento:</strong>
+          ¿Creció <code>record_index</code>? &rarr; <em>Sí:</em> <code>[SOURCES_GROWN]</code>, se carga el ledger y se regenera todo | <em>No:</em> corrida normal.
+        </div>
+      </div>
+      <div class="tradeoff-box">
+        <div class="tradeoff-title">Decisión vs. Descartado</div>
+        <strong>Elegido:</strong> Caché local con ETag y mapa de offsets.<br>
+        <strong>Descartado:</strong> Streaming sin estado ni offsets (rompe el formato original al reemplazar).
+      </div>
+    </div>
+
+    <div class="arrow-col">&rarr;</div>
+
+    <!-- ETAPA 2 -->
+    <div class="col">
+      <div>
+        <div class="col-header">2. Grafo de Identidad</div>
+        <div class="node green" style="margin-top:4.5px;">
+          <div class="node-title">Padrón Canónico Dual</div>
+          <div class="node-desc">Crea un <code>canonical_id</code> por persona desde <code>clientes.csv</code> (<code>CL-*</code>) y <code>empleados.xml</code> (<code>KP-*</code> + <code>users.json</code>).</div>
+        </div>
+        <div class="node green" style="margin-top:4.5px;">
+          <div class="node-title">Resolución Relacional Cruzada</div>
+          <div class="node-desc">Vincula radicados (<code>PQR-*</code>), <code>fecha+monto</code> (<code>TX-*</code>), UID Slack y jerarquía <code>"reporta a"</code>.</div>
+        </div>
+        <div class="decision-diamond" style="margin-top:4.5px;">
+          <strong>&loz; ¿Nombre con Homonimia?</strong>
+          <em>1 dueño:</em> Asignación directa.<br>
+          <em>&ge;2 dueños (2 clientas / agente):</em> Desempata por PQR, TX, UID o adjunto en el hilo.
+        </div>
+      </div>
+      <div class="tradeoff-box">
+        <div class="tradeoff-title">Decisión vs. Descartado</div>
+        <strong>Elegido:</strong> Indexar por <code>canonical_id</code> + ID global <code>external:</code>.<br>
+        <strong>Descartado:</strong> Mapa por nombre o resolver solo por <code>author</code> (fusiona homónimas y falla en traspasos).
+      </div>
+    </div>
+
+    <div class="arrow-col">&rarr;</div>
+
+    <!-- ETAPA 3 -->
+    <div class="col">
+      <div>
+        <div class="col-header">3. Detección en 3 Capas</div>
+        <div class="node amber" style="margin-top:4.5px;">
+          <div class="node-title">1. Aho-Corasick + 2. Regex CO</div>
+          <div class="node-desc">Barrido O(N) sin tildes/MAYÚSCULAS, emails con <em>"arroba/punto"</em>, cédulas, placas, pasaportes y Slack <code>&lt;@U...&gt;</code>.</div>
+        </div>
+        <div class="node amber" style="margin-top:4.5px;">
+          <div class="node-title">3. Extractor de Spans LLM (Cacheado)</div>
+          <div class="node-desc">Detecta terceros fuera de tablas, apodos y etiqueta entidades públicas (<code>kept: true</code>) en ES y EN.</div>
+        </div>
+        <div class="decision-diamond" style="margin-top:4.5px;">
+          <strong>&loz; ¿Apellido = Lugar/Marca?</strong>
+          Con marcador de persona (<em>"Sra. Restrepo"</em>) &rarr; Seudonimiza.<br>
+          Con marcador de lugar/org (<em>"Barrio Restrepo"</em>, <em>"Seguros Bolívar"</em>) &rarr; Conserva (<code>kept: true</code>).
+        </div>
+      </div>
+      <div class="tradeoff-box">
+        <div class="tradeoff-title">Decisión vs. Descartado</div>
+        <strong>Elegido:</strong> LLM devuelve solo JSON de spans; código reemplaza.<br>
+        <strong>Descartado:</strong> LLM reescribiendo texto (altera negocio, no es determinista y pierde parecido con la salida ideal).
+      </div>
+    </div>
+
+    <div class="arrow-col">&rarr;</div>
+
+    <!-- ETAPA 4 -->
+    <div class="col">
+      <div>
+        <div class="col-header">4. Seudónimos &amp; Cuasi-IDs</div>
+        <div class="node" style="margin-top:4.5px;">
+          <div class="node-title">Faker (es_CO) + HMAC + Ledger</div>
+          <div class="node-desc">Semilla <code>HMAC(secret, canonical_id:attr)</code> sobre el ledger persistido. Conserva género, formato espejo de cédula/placa y estilo MAYÚSCULAS/deletreado.</div>
+        </div>
+        <div class="node" style="margin-top:4.5px;">
+          <div class="node-title">Generalizador Cuasi-Identificadores</div>
+          <div class="node-desc">Unifica tabla y chat: lleva ocupación a sector (<em>"periodista" &rarr; "profesional de medios"</em>), barrio a ciudad y año a frase.</div>
+        </div>
+        <div class="decision-diamond" style="margin-top:4.5px;">
+          <strong>&loz; ¿Tupla (Barrio, Ocupación, Año) Única?</strong>
+          <em>Única en la unión tabla + texto (k = 1):</em> Generaliza en <code>clientes.csv</code> y en los textos de esa persona.<br>
+          <em>No única:</em> Conserva valor.
+        </div>
+      </div>
+      <div class="tradeoff-box">
+        <div class="tradeoff-title">Decisión vs. Descartado</div>
+        <strong>Elegido:</strong> Seudónimo con formato espejo + generalización dual.<br>
+        <strong>Descartado:</strong> SHA-256 (reversible, 58 pts), <code>[REDACTED]</code> (56 pts) o desplazar año al azar (sigue siendo único).
+      </div>
+    </div>
+
+    <div class="arrow-col">&rarr;</div>
+
+    <!-- ETAPA 5 -->
+    <div class="col">
+      <div>
+        <div class="col-header">5. Guard &amp; API /v1</div>
+        <div class="node rose" style="margin-top:4.5px;">
+          <div class="node-title">Guard Espejo de validar.mjs</div>
+          <div class="node-desc">Busca variantes con <code>norm()</code> (NFKC + confusables + NFD) y <code>digitosEn()</code> (sin separadores ni prefijo <code>57</code>).</div>
+        </div>
+        <div class="node rose" style="margin-top:4.5px;">
+          <div class="node-title">Poda Coherente de entities.json</div>
+          <div class="node-desc">Incluye en <code>pseudonyms</code> solo atributos presentes en los <code>records</code> de la entidad + lista <code>kept: true</code>.</div>
+        </div>
+        <div class="decision-diamond" style="margin-top:4.5px;">
+          <strong>&loz; Compuerta Pre-Salida (dentro de /v1/run):</strong>
+          ¿0 formas reales en salida y 0 errores en <code>validar.mjs</code>? &rarr; Publica <code>chats/docs/tables.jsonl</code> + <code>entities.json</code>.
+        </div>
+      </div>
+      <div class="tradeoff-box">
+        <div class="tradeoff-title">Decisión vs. Descartado</div>
+        <strong>Elegido:</strong> Diccionario de valores reales + poda por <code>records</code>.<br>
+        <strong>Descartado:</strong> Guard de entropía ciega y exportar seudónimos no usados en los registros.
+      </div>
+    </div>
+  </div>
+
+  <div class="bottom-grid">
+    <div class="bar-box">
+      <div class="bar-title">Flujo Unificado Batch (POST /v1/run) y Tiempo Real (POST /v1/anonymize &lt; 60s / 50 registros)</div>
+      Ambos endpoints ejecutan el mismo pipeline sobre <code>state/entity_ledger.json</code>. <code>/v1/run</code> corre en un proceso aparte para que <code>/health</code> siempre responda. Si un registro en vivo menciona a una clienta o empleada existente, reutiliza su seudónimo de <code>output/</code>; si contiene una persona nueva, genera un <code>canonical_id</code> determinista sin colisión; si el LLM supera 45&nbsp;s en un lote, aplica degradación elegante al motor determinista + Guard.
+    </div>
+    <div class="bar-box">
+      <div class="bar-title">Inmutabilidad ante Crecimiento del API de Fuentes</div>
+      Cuando el API agrega canales, fechas, documentos o filas, el ledger se carga antes de asignar: las personas previas conservan exactamente su seudónimo y las colisiones solo afectan a las nuevas. <code>HMAC(PSEUDONYM_SECRET, canonical_id)</code> reproduce los seudónimos si el ledger se pierde.
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
