@@ -6,9 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOST=0.0.0.0 \
     STATE_DIR=/app/state \
     OUTPUT_DIR=/app/output \
-    RUN_MODE=eval \
-    PSEUDONYM_SECRET=9f4c8e2a71d053b6e91c4a82f70d3e5b18a96c24d7e03f518b62c49a3d7e10f8 \
-    SOURCES_URL=https://reto-pii-fuentes-production.up.railway.app/v1
+    RUN_MODE=eval
 
 # Install system build dependencies and Node.js 20+ (with Debian nodejs fallback) for `node validar.mjs`
 RUN apt-get update && apt-get install -y --no-install-recommends \

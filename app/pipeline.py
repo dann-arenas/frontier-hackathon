@@ -129,7 +129,7 @@ def _anonymize_tables_in_place(
 
         if tname == "clientes":
             cid = cols.get("cliente_id", "").strip() or rid.split(":", 1)[-1]
-            ced = solo_digitos(cols.get("num_doc", ""))
+            ced = solo_digitos(cols.get("num_doc", "") or cols.get("documento", "") or cols.get("cedula", ""))
             em = cols.get("correo", "").strip().lower()
             ph = solo_digitos(cols.get("celular", ""))[-10:]
             p = (
@@ -140,7 +140,7 @@ def _anonymize_tables_in_place(
                 or (reg.by_phone.get(ph) if ph else None)
             )
             if p is None:
-                orig_name = cols.get("nombre_completo", "").strip()
+                orig_name = (cols.get("nombre_completo") or cols.get("nombre") or "").strip()
                 g, s1, s2, short = split_colombian_name(orig_name)
                 p = PersonEntity(
                     canonical_id=cid,
@@ -170,13 +170,15 @@ def _anonymize_tables_in_place(
                 _ensure_person_pseudonyms(p, ledger)
 
             ps = p.pseudonyms
-            if cols.get("nombre_completo"):
-                orig_n = cols["nombre_completo"]
-                p.record_hit(rid, orig_n, "name")
-                cols["nombre_completo"] = ps["full_name"] if len(orig_n.split()) >= 3 else ps["short_name"]
-            if cols.get("num_doc"):
-                p.record_hit(rid, cols["num_doc"], "cedula")
-                cols["num_doc"] = ps["cedula"]
+            for name_k in ("nombre_completo", "nombre"):
+                if cols.get(name_k):
+                    orig_n = cols[name_k]
+                    p.record_hit(rid, orig_n, "name")
+                    cols[name_k] = ps["full_name"] if len(orig_n.split()) >= 3 else ps["short_name"]
+            for doc_k in ("num_doc", "documento", "cedula"):
+                if cols.get(doc_k):
+                    p.record_hit(rid, cols[doc_k], "cedula")
+                    cols[doc_k] = ps["cedula"]
             if cols.get("correo"):
                 p.record_hit(rid, cols["correo"], "email")
                 cols["correo"] = ps["email"]
@@ -367,6 +369,7 @@ def _anonymize_tables_in_place(
                     spans = resolve_text_spans(cols[txt_k], reg, automaton, ledger, ctx)
                     cols[txt_k] = apply_resolved_spans(cols[txt_k], spans, rid)
                     cols[txt_k] = generalize_quasi_in_text(cols[txt_k], rid, "tables", person=p)
+                    automaton = KnownAutomaton(reg)
 
         elif tname == "transacciones":
             cid = cols.get("cliente_id", "").strip()
@@ -381,6 +384,7 @@ def _anonymize_tables_in_place(
                 )
                 spans = resolve_text_spans(cols["descripcion"], reg, automaton, ledger, ctx)
                 cols["descripcion"] = apply_resolved_spans(cols["descripcion"], spans, rid)
+                automaton = KnownAutomaton(reg)
 
 
 def _anonymize_chats_in_place(
@@ -519,10 +523,11 @@ def _anonymize_chats_in_place(
                 author_p.record_hit(rid, None, "name")
             c["author"] = author_p.pseudonyms["short_name"]
 
-        tc = thread_clients.get(tid)
-        if tc is None and author_p is not None and not author_p.is_employee:
+        if author_p is not None and not author_p.is_employee:
             tc = author_p
-            thread_clients[tid] = tc
+            thread_clients[tid] = author_p
+        else:
+            tc = thread_clients.get(tid)
 
         ctx = ResolutionContext(
             record_id=rid,
@@ -537,12 +542,14 @@ def _anonymize_chats_in_place(
         if txt:
             ctx.llm_spans = get_cached_llm_spans(txt)
             spans = resolve_text_spans(txt, reg, automaton, ledger, ctx)
+            automaton = KnownAutomaton(reg)
             # If an unseen client self-introduced in text and author was a generic placeholder or matched
             if tc is None:
                 for sp in spans:
                     if sp.person is not None and not sp.person.is_employee:
                         tc = sp.person
                         thread_clients[tid] = tc
+                        ctx.thread_client = tc
                         break
             txt_out = apply_resolved_spans(txt, spans, rid)
             txt_out = generalize_quasi_in_text(txt_out, rid, "chats", person=tc or author_p)
@@ -577,26 +584,31 @@ def _anonymize_docs_in_place(
             doc_participants=participants,
         )
 
-        for field_k in ("filename", "title"):
-            val = str(d.get(field_k, ""))
-            if val:
-                spans = resolve_text_spans(val, reg, automaton, ledger, ctx)
-                d[field_k] = apply_resolved_spans(val, spans, rid)
+        body = str(d.get("body", ""))
+        if body:
+            ctx.llm_spans = get_cached_llm_spans(body)
+            spans = resolve_text_spans(body, reg, automaton, ledger, ctx)
+            automaton = KnownAutomaton(reg)
+            for sp in spans:
+                if sp.person is not None and sp.person not in ctx.doc_participants:
+                    ctx.doc_participants.append(sp.person)
+            body_out = apply_resolved_spans(body, spans, rid)
+            body_out = generalize_quasi_in_text(body_out, rid, "docs")
+            d["body"] = body_out
 
         meta = d.get("metadata")
         if isinstance(meta, dict):
             for mk, mv in list(meta.items()):
                 if isinstance(mv, str) and mv:
                     spans = resolve_text_spans(mv, reg, automaton, ledger, ctx)
+                    automaton = KnownAutomaton(reg)
                     meta[mk] = apply_resolved_spans(mv, spans, rid)
 
-        body = str(d.get("body", ""))
-        if body:
-            ctx.llm_spans = get_cached_llm_spans(body)
-            spans = resolve_text_spans(body, reg, automaton, ledger, ctx)
-            body_out = apply_resolved_spans(body, spans, rid)
-            body_out = generalize_quasi_in_text(body_out, rid, "docs")
-            d["body"] = body_out
+        for field_k in ("title", "filename"):
+            val = str(d.get(field_k, ""))
+            if val:
+                spans = resolve_text_spans(val, reg, automaton, ledger, ctx)
+                d[field_k] = apply_resolved_spans(val, spans, rid)
 
 
 def run_full_pipeline(
@@ -614,7 +626,11 @@ def run_full_pipeline(
     out_dir = output_dir or OUTPUT_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
     l_path = ledger_path or (STATE_DIR / "entity_ledger.json")
-    s_path = snapshot_path or (STATE_DIR / "registry_snapshot.json")
+    s_path = snapshot_path or (
+        (l_path.parent / "registry_snapshot.json")
+        if ledger_path is not None
+        else (STATE_DIR / "registry_snapshot.json")
+    )
 
     ledger = PseudonymLedger(ledger_path=l_path)
     existing_reg = EntityRegistry(ledger=ledger)

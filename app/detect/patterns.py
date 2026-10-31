@@ -35,8 +35,11 @@ RX_BIRTH_SPANISH = re.compile(
 RX_BIRTH_SLASH = re.compile(r"\b(0?[1-9]|[12]\d|3[01])/(0?[1-9]|[12]\d|3[01])/(19[4-9]\d|200\d)\b")
 RX_PLATE_CTX = re.compile(r"\b(?:placa|car\s+is)\s+([A-Z]{3}[-\s]?\d{2}[0-9A-Z])\b", re.I)
 RX_PASSPORT_CTX = re.compile(r"\b(?:pasaporte|passport)\s+([A-Z]{1,3}\d{5,8})\b", re.I)
-RX_ACCOUNT_CTX = re.compile(r"\b(?:cuenta|account)\s+(?:de\s+ahorros\s+|corriente\s+|number\s+)?(\d{4}[\s\-]\d{4}[\s\-]\d{2,3})\b", re.I)
-RX_LAST4_TOKEN = re.compile(r"(?<![0-9.])(\d{4})(?![0-9.])")
+RX_ACCOUNT_CTX = re.compile(
+    r"\b(?:cuenta|account)\s+(?:de\s+ahorros\s+|corriente\s+|bancaria\s+|no\.?\s+|n[uú]mero\s+|number\s+)?(\d{3,4}[\s\-]\d{4,6}[\s\-]\d{2,4})\b",
+    re.I,
+)
+RX_LAST4_TOKEN = re.compile(r"(?<![0-9.])(\d{4})(?![0-9]|\.\d)")
 
 # Corporate office address of Kipu Pay (must be preserved)
 KIPU_OFFICE_ADDR_NORM = "cra 43a # 1-50"

@@ -20,12 +20,12 @@ VERSION: str = os.getenv("APP_VERSION", "1.0.0")
 SOURCES_URL: str = (
     os.getenv("SOURCES_URL")
     or os.getenv("SOURCES_BASE_URL")
-    or "https://reto-pii-fuentes-production.up.railway.app/v1"
+    or ""
 ).rstrip("/")
 SOURCES_TOKEN: str = os.getenv("SOURCES_TOKEN", "")
 
 PSEUDONYM_SECRET: str = os.getenv(
-    "PSEUDONYM_SECRET", "kipupay-abh-cdmx-2026-deterministic-hmac-secret-key-v1"
+    "PSEUDONYM_SECRET", "dev-local-fallback-seed"
 )
 RUN_MODE: str = os.getenv("RUN_MODE", "dev")
 

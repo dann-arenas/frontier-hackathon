@@ -22,6 +22,8 @@ def log_step(
     latency_ms: float = 0.0,
     tokens: int = 0,
     cost_usd: float = 0.0,
+    tokens_in: int = 0,
+    tokens_out: int = 0,
     guard: str = "PASS",
     status: str = "PASS",
 ) -> None:
@@ -42,6 +44,8 @@ def log_step(
         "model": model,
         "latency_ms": round(latency_ms, 2),
         "tokens": tokens,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
         "cost_usd": round(cost_usd, 6),
         "guard": guard,
         "status": status,
@@ -51,6 +55,23 @@ def log_step(
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
     except Exception:
         pass
+
+
+def sum_llm_usage(since_iso: str) -> dict[str, int]:
+    """Sum LLM tokens logged in the trace since `since_iso`, for `cost` in `GET /v1/run/{job_id}`."""
+    totals = {"tokens_in": 0, "tokens_out": 0}
+    if not TRACE_FILE.exists():
+        return totals
+    with open(TRACE_FILE, encoding="utf-8") as f:
+        for line in f:
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if event.get("mode") == "LLM" and event.get("ts", "") >= since_iso:
+                totals["tokens_in"] += int(event.get("tokens_in", 0))
+                totals["tokens_out"] += int(event.get("tokens_out", 0))
+    return totals
 
 
 def log_sources_grown(prev_counts: dict[str, int], new_counts: dict[str, int]) -> None:

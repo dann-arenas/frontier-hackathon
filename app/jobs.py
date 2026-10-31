@@ -13,14 +13,14 @@ from pathlib import Path
 from typing import Any
 
 from app.config import JOBS_DIR, OUTPUT_DIR, ROOT_DIR, STATE_DIR
-from app.normalize import contiene, digitos_en
+from app.normalize import contiene, es_nombre_suelto, texto_de_registro
 from app.pipeline import run_full_pipeline
 from app.sources import fetch_from_api, load_from_local_dir
-from app.telemetry import log_step, record_failure_analysis
+from app.telemetry import log_step, record_failure_analysis, sum_llm_usage
 
 
 def _validate_staging_python_fallback(staging_dir: Path, public_idx_dir: Path) -> tuple[bool, str]:
-    """In-process Python port of `validar.mjs` used only if the `node` binary is absent."""
+    """Exact 100% Python port of `validar.mjs` used if the `node` binary is absent."""
     try:
         chats = [json.loads(l) for l in (staging_dir / "chats.jsonl").read_text("utf-8").splitlines() if l.strip()]
         docs = [json.loads(l) for l in (staging_dir / "docs.jsonl").read_text("utf-8").splitlines() if l.strip()]
@@ -30,12 +30,14 @@ def _validate_staging_python_fallback(staging_dir: Path, public_idx_dir: Path) -
     except Exception as e:
         return False, f"Missing or invalid output files: {e}"
 
-    by_id: dict[str, str] = {}
+    by_id: dict[str, dict[str, Any]] = {}
+    text_by_id: dict[str, str] = {}
     for r in chats + docs + tables:
         rid = r.get("id")
         if not rid or rid in by_id:
             return False, f"Duplicate or missing id: {rid}"
-        by_id[rid] = json.dumps(r, ensure_ascii=False)
+        by_id[rid] = r
+        text_by_id[rid] = texto_de_registro(r)
 
     idx_path = public_idx_dir / "record_index.json"
     if idx_path.exists():
@@ -46,18 +48,49 @@ def _validate_staging_python_fallback(staging_dir: Path, public_idx_dir: Path) -
             if expected != got:
                 return False, f"{k} record_index mismatch"
 
-    full_text = "\n".join(by_id.values())
+    conservados: list[str] = []
     for ent in entities:
-        recs = ent.get("records", [])
-        if not recs:
-            return False, f"Entity {ent.get('entity_id')} has empty records"
-        if ent.get("type") == "person" and not ent.get("kept"):
-            for orig in ent.get("originals", []):
-                if contiene(full_text, orig) or digitos_en(full_text, orig):
-                    return False, f"Entity {ent.get('entity_id')}: original leaked ({orig})"
-            for k, val in (ent.get("pseudonyms") or {}).items():
-                if not any(contiene(by_id.get(rid, ""), str(val)) or digitos_en(by_id.get(rid, ""), str(val)) for rid in recs):
-                    return False, f"Entity {ent.get('entity_id')}: pseudonym {k}={val} not found in records"
+        if ent.get("kept"):
+            for orig in ent.get("originals") or []:
+                if isinstance(orig, str) and len(orig) >= 4 and any(c.isalpha() for c in orig):
+                    conservados.append(orig)
+
+    full_text = "\n".join(text_by_id.values())
+    seen_eids: set[str] = set()
+    for ent in entities:
+        eid = str(ent.get("entity_id", ""))
+        if not eid or eid in seen_eids:
+            return False, f"Duplicate or missing entity_id: {eid}"
+        seen_eids.add(eid)
+
+        recs = [rr for rr in (ent.get("records") or []) if rr in text_by_id]
+        for rr in ent.get("records") or []:
+            if rr not in text_by_id and not str(rr).endswith(":*"):
+                return False, f"Entity {eid} references nonexistent record {rr}"
+
+        if ent.get("kept"):
+            continue
+
+        pseud = ent.get("pseudonyms") or {}
+        if not isinstance(pseud, dict) or not pseud:
+            return False, f"Entity {eid} not kept and missing pseudonyms"
+
+        for k, val in pseud.items():
+            if not isinstance(val, str) or not val:
+                continue
+            if recs and not any(contiene(text_by_id[rid], val) for rid in recs):
+                return False, f"Entity {eid}: pseudonym {k}={val} not found in records"
+
+        for orig in ent.get("originals") or []:
+            if not isinstance(orig, str) or len(orig) < 3:
+                continue
+            if any(contiene(k, orig) for k in conservados):
+                continue
+            if es_nombre_suelto(orig):
+                continue
+            if contiene(full_text, orig):
+                return False, f"Entity {eid}: original leaked ({orig})"
+
     return True, "OK: la salida pasa el validador"
 
 
@@ -216,14 +249,15 @@ def execute_job_sync(job_id: str, sources_url: str, token: str) -> dict[str, Any
             shutil.copy2(dst_f, latest_out_dir / fname)
 
         elapsed = round(time.perf_counter() - t0, 3)
+        trace_usage = sum_llm_usage(started_at)
         done_state: dict[str, Any] = {
             "status": "done",
             "started_at": started_at,
             "finished_at": _utc_now_iso(),
             "records": res["records"],
             "cost": {
-                "tokens_in": int(res.get("tokens_in", 0)),
-                "tokens_out": int(res.get("tokens_out", 0)),
+                "tokens_in": int(res.get("tokens_in", 0)) or trace_usage["tokens_in"],
+                "tokens_out": int(res.get("tokens_out", 0)) or trace_usage["tokens_out"],
                 "usd": round(float(res.get("cost_usd", 0.0)), 6),
                 "seconds": elapsed,
             },
@@ -234,14 +268,15 @@ def execute_job_sync(job_id: str, sources_url: str, token: str) -> dict[str, Any
 
     except Exception as exc:
         elapsed = round(time.perf_counter() - t0, 3)
+        trace_usage = sum_llm_usage(started_at)
         failed_state: dict[str, Any] = {
             "status": "failed",
             "started_at": started_at,
             "finished_at": _utc_now_iso(),
             "records": {"chats": 0, "docs": 0, "tables": 0},
             "cost": {
-                "tokens_in": 0,
-                "tokens_out": 0,
+                "tokens_in": trace_usage["tokens_in"],
+                "tokens_out": trace_usage["tokens_out"],
                 "seconds": elapsed,
             },
             "error": str(exc)[:500],

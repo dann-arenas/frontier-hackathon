@@ -101,6 +101,10 @@ FEMALE_NAMES_KNOWN: set[str] = {
     "sonia", "stellla", "susana", "tatiana", "teresa", "valentina", "valeria", "vanessa",
     "veronica", "victoria", "viviana", "wendy", "ximena", "xiomara", "yenny", "yesenia",
     "yolanda", "yuliana", "zulma",
+    "rigoberta", "hermelinda", "rosalba", "eduviges", "jacinta", "filomena", "teodora", "eulalia",
+    "hortensia", "matilde", "carlota", "gertrudis", "casilda", "dominga", "tomasa", "gregoria",
+    "bartola", "escolastica", "petronila", "sinforosa", "emerita", "transito", "visitacion",
+    "mary", "sarah", "emily", "jennifer", "elizabeth", "jessica", "ashley", "amanda",
     *(norm(x) for x in FAKE_GIVEN_F),
 }
 
@@ -121,6 +125,8 @@ MALE_NAMES_KNOWN: set[str] = {
     "reinaldo", "ricardo", "roberto", "rodolfo", "rodrigo", "roman", "ruben", "samuel",
     "santiago", "saul", "sebastian", "sergio", "simon", "teodoro", "tomas", "vicente",
     "victor", "william", "wilmer", "wilson", "yamid", "yesid",
+    "filiberto", "rigo", "rigoberto", "thomas", "michael", "robert", "richard", "charles",
+    "joseph", "james", "steven", "andrew", "matthew", "anthony", "mark", "paul",
     *(norm(x) for x in FAKE_GIVEN_M),
 }
 
@@ -160,6 +166,9 @@ KNOWN_SURNAMES: set[str] = {
     "valencia", "vallejo", "vanegas", "varela", "vargas", "vasquez", "vega", "vela",
     "velasco", "velasquez", "velez", "vera", "vergara", "villa", "villalba", "villamizar",
     "villanueva", "villegas", "yepes", "zambrano", "zapata", "zuluaga", "zuniga",
+    "menchu", "saez", "rondon", "pombo", "quiceno", "palomo", "ospino", "alzate", "mejorada",
+    "berrio", "rivas", "zuleta", "chaux", "lleras", "gaviria", "samper", "turbay", "holguin",
+    "whitfield", "smith", "johnson", "williams", "brown", "jones", "miller", "davis",
     *(norm(x) for x in FAKE_SURNAMES),
 }
 

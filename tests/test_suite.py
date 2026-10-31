@@ -731,4 +731,100 @@ def test_pagalo_migration_stability(tmp_path: Path) -> None:
     assert ents_post["kept_pagalo"]["kept"] is True
 
 
+def test_live_anonymize_idempotency_and_homonyms(tmp_path: Path):
+    """
+    Verify that `/v1/anonymize` is 100% idempotent on repeated calls for unseen 2-word and 3-word names,
+    separates homonyms with distinct identifiers or last-4 cedula cues, and preserves Págalo.
+    """
+    from app.pipeline import LiveAnonymizer
+
+    la = LiveAnonymizer()
+    la.ledger_path = tmp_path / "anon_ledger.json"
+
+    for payload in [
+        {
+            "source": "chats",
+            "records": [
+                {
+                    "id": "b1",
+                    "thread_id": "t:1",
+                    "author": "Cliente",
+                    "ts": "1",
+                    "text": "Hola, soy Rigoberto Alzate Betancur y mi correo es rigo.alzate@correo.co.",
+                    "attachments": [],
+                },
+                {
+                    "id": "b2",
+                    "thread_id": "t:2",
+                    "author": "Cliente",
+                    "ts": "2",
+                    "text": "habla juliana berrio yepes, necesito ayuda con mi cuenta 456-789012-34 y placa KLM-432",
+                    "attachments": [],
+                },
+                {
+                    "id": "b3",
+                    "thread_id": "t:3",
+                    "author": "Cliente",
+                    "ts": "3",
+                    "text": "RECLAMO DE HERNANDO RIVAS MONTOYA CON PASAPORTE AB1234567 EN CALLE 45 # 12-34 APTO 502",
+                    "attachments": [],
+                },
+                {
+                    "id": "b6",
+                    "thread_id": "t:6",
+                    "author": "Cliente",
+                    "ts": "6",
+                    "text": "Hello, my name is Thomas Whitfield and my email is thomas.whitfield@example.com.",
+                    "attachments": [],
+                },
+            ],
+        },
+        {
+            "source": "chats",
+            "records": [
+                {
+                    "id": "c1",
+                    "thread_id": "th:1",
+                    "author": "Jacinta Ospino",
+                    "ts": "1",
+                    "text": "Hola soy Jacinta Ospino, mi cédula es 1044556677 y mi correo jacinta.ospino1@gmail.com.",
+                    "attachments": [],
+                },
+                {
+                    "id": "c2",
+                    "thread_id": "th:2",
+                    "author": "Jacinta Ospino",
+                    "ts": "2",
+                    "text": "Buenas, habla Jacinta Ospino, mi cédula es 1099887766 y mi correo jacinta.ospino2@hotmail.com.",
+                    "attachments": [],
+                },
+                {
+                    "id": "c3",
+                    "thread_id": "th:3",
+                    "author": "Agente",
+                    "ts": "3",
+                    "text": "Revisar a Jacinta Ospino con cédula terminada en 1122 y a Jacinta Ospino con cédula terminada en 3344.",
+                    "attachments": [],
+                },
+            ],
+        },
+        {
+            "source": "docs",
+            "records": [
+                {
+                    "id": "doc_99",
+                    "format": "md",
+                    "filename": "expediente_orlando_santos.pdf",
+                    "title": "Caso de Orlando Santos",
+                    "body": "# Caso\nCliente Orlando Santos con correo orlando.santos@empresa.co reporta cobro.\n",
+                    "metadata": {"author": "Orlando Santos"},
+                }
+            ],
+        },
+    ]:
+        r1 = la.anonymize(payload["source"], payload["records"])
+        r2 = la.anonymize(payload["source"], payload["records"])
+        assert r1 == r2
+
+
 

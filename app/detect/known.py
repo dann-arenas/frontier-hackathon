@@ -89,10 +89,12 @@ class KnownAutomaton:
 
         # 2. Person entities
         for p in self.registry.persons.values():
-            if p.full_name:
+            if p.full_name and len(p.full_name.split()) >= 3:
                 self._add_pattern(norm(p.full_name), "full_name", p, 95)
             if p.short_name:
                 self._add_pattern(norm(p.short_name), "short_name", p, 90)
+            elif p.full_name:
+                self._add_pattern(norm(p.full_name), "short_name", p, 90)
             if p.given_name:
                 gn = norm(p.given_name)
                 if len(gn) >= 3:

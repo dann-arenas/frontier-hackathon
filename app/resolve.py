@@ -216,7 +216,7 @@ RX_SURNAME_TITLE_BEFORE = re.compile(
 )
 
 RX_PLACE_PREP_BEFORE = re.compile(
-    r"\b(?:en|desde|hacia|hasta|por|sucursal|sede|oficina|cajero\s+de|estaci[oó]n|parque\s+de|plaza|barrio|municipio\s+de|ciudad\s+de|v[ií]a|autopista|avenida|calle|carrera|banco|cuenta\s+de|transferencia\s+a)\s+$",
+    r"\b(?:en|desde|hacia|hasta|por|sucursal|sede|oficina|cajero(?:\s+de)?|estaci[oó]n|parque(?:\s+de)?|plaza|barrio|municipio\s+de|ciudad\s+de|v[ií]a|autopista|avenida|calle|carrera|banco|cuenta\s+de)\s+$",
     re.I,
 )
 
@@ -231,7 +231,7 @@ RX_DIRECT_VOCATIVE_BEFORE = re.compile(
 )
 
 RX_UNSEEN_INTRO = re.compile(
-    r"(?:\b(?:me\s+llamo|mi\s+nombre\s+es|soy|habla|te\s+atiende|le\s+atiende|preparado\s+por|elabor[oó]\s*:?|revisado\s+por|reviewed\s+by|prepared\s+by|created\s+by|authored\s+by|author\s*:|client\s*:|customer\s*:|contact\s*:|agent\s*:|my\s+name\s+is|i\s+am|i'm|auditora?\s*:?|responsable\s*:?|aprueba\s*:?|familiar\s+de|a\s+nombre\s+de|de\s+parte\s+de|en\s+mi\s+familia|se[ñn]or(?:a|ita)?|sr\.?|sra\.?|don|do[ñn]a|doctor(?:a)?|dr\.?|dra\.?|mr\.?|mrs\.?|ms\.?|abogad[oa]|cliente|usuari[oa]|titular)\s+)"
+    r"(?:\b(?:me\s+llamo|mi\s+nombre\s+es|soy|habla|te\s+atiende|le\s+atiende|habl[eé]\s+con|hablamos\s+con|atend[ií]\s+a|revisar\s+a|transferencia\s+a|pago\s+a|giro\s+a|reclamo\s+de|carta\s+a|caso\s+de|preparado\s+por|elabor[oó]\s*:?|revisado\s+por|reviewed\s+by|prepared\s+by|created\s+by|authored\s+by|author\s*:|client\s*:|customer\s*:|contact\s*:|agent\s*:|my\s+name\s+is|i\s+am|i'm|auditora?\s*:?|responsable\s*:?|aprueba\s*:?|familiar\s+de|a\s+nombre\s+de|de\s+parte\s+de|en\s+mi\s+familia|se[ñn]or(?:a|ita)?|sr\.?|sra\.?|don|do[ñn]a|doctor(?:a)?|dr\.?|dra\.?|mr\.?|mrs\.?|ms\.?|abogad[oa]|cliente|usuari[oa]|titular)\s+)"
     r"([A-Za-záéíóúñÁÉÍÓÚÑ]+(?:\s+[A-Za-záéíóúñÁÉÍÓÚÑ]+){1,3})",
     re.I,
 )
@@ -249,6 +249,53 @@ RX_UNSEEN_PAREN_ID = re.compile(
 )
 
 STOP_INTRO_WORDS = {
+    "y",
+    "e",
+    "o",
+    "u",
+    "ni",
+    "and",
+    "or",
+    "with",
+    "from",
+    "for",
+    "by",
+    "in",
+    "on",
+    "at",
+    "to",
+    "my",
+    "his",
+    "her",
+    "their",
+    "our",
+    "your",
+    "was",
+    "were",
+    "is",
+    "are",
+    "sobre",
+    "bajo",
+    "ante",
+    "contra",
+    "desde",
+    "durante",
+    "mediante",
+    "segun",
+    "según",
+    "hacia",
+    "hasta",
+    "ayer",
+    "hoy",
+    "manana",
+    "mañana",
+    "llamo",
+    "llamó",
+    "llamaron",
+    "escribio",
+    "escribió",
+    "clienta",
+    "cliente",
     "el",
     "la",
     "los",
@@ -775,6 +822,10 @@ RX_LOCAL_CEDULA = re.compile(
     r"(\d{1,3}(?:[.\s]\d{3}){2,3}|\d{6,10})\b",
     re.I,
 )
+RX_LOCAL_CEDULA_LAST4 = re.compile(
+    r"\b(?:c[eé]dula|cc|c\.c\.|documento|doc)\s+terminad[oa]\s+en\s+(\d{4})\b",
+    re.I,
+)
 RX_LOCAL_EMAIL = re.compile(r"\b([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})\b")
 RX_LOCAL_PHONE = re.compile(r"(?:\+?57[\s.\-]?)?\b(3\d{2}[\s.\-]?\d{3}[\s.\-]?\d{4})\b")
 
@@ -788,6 +839,10 @@ def _extract_local_identifiers(local_text: str) -> tuple[str, str, str]:
         d = solo_digitos(m_ced.group(1))
         if 6 <= len(d) <= 10:
             local_ced = d
+    if not local_ced:
+        m_l4 = RX_LOCAL_CEDULA_LAST4.search(local_text)
+        if m_l4:
+            local_ced = f"last4:{m_l4.group(1)}"
 
     local_email = ""
     m_em = RX_LOCAL_EMAIL.search(local_text)
@@ -843,7 +898,7 @@ def _get_or_register_dynamic_person(
     if not n_name or n_name in reg.kept or n_name in ("kipu pay", "kipi"):
         return None
     for k_ent in reg.kept.values():
-        if any(norm(orig) == n_name for orig in k_ent.originals_found):
+        if any(norm(v) == n_name for v in k_ent.variants):
             return None
 
     if explicit_id and explicit_id in reg.persons:
@@ -871,6 +926,9 @@ def _get_or_register_dynamic_person(
         short_n = norm(short)
 
     local_ced, local_email, local_phone = _extract_local_identifiers(local_text)
+    local_ced_last4 = local_ced.split(":", 1)[1] if local_ced.startswith("last4:") else ""
+    if local_ced_last4:
+        local_ced = ""
     if local_ced and local_ced in reg.by_cedula:
         owner = reg.by_cedula[local_ced]
         if norm(owner.short_name) != short_n and norm(owner.full_name) != n_name and norm(owner.given_name) != short_n:
@@ -898,28 +956,28 @@ def _get_or_register_dynamic_person(
         for c in cands:
             if local_ced and c.cedula == local_ced:
                 return c
+            if local_ced_last4 and c.cedula and c.cedula.endswith(local_ced_last4):
+                return c
             if local_email and c.email and c.email.lower() == local_email:
                 return c
             if local_phone and c.phone == local_phone:
                 return c
 
         # 2. If local text has a discriminating identifier, check if any candidate is compatible
-        if local_ced or local_email or local_phone:
+        if local_ced or local_ced_last4 or local_email or local_phone:
             compatible: list[PersonEntity] = []
             for c in cands:
                 if not c.canonical_id.startswith("external:"):
                     continue
-                if local_ced and c.cedula and c.cedula != local_ced:
-                    continue
-                if local_email and c.email and c.email.lower() != local_email:
-                    continue
-                if local_phone and c.phone and c.phone != local_phone:
+                if c.cedula or c.email or c.phone:
                     continue
                 compatible.append(c)
             if compatible:
                 target = compatible[0]
                 if local_ced and not target.cedula:
                     target.cedula = local_ced
+                elif local_ced_last4 and not target.cedula:
+                    target.cedula = f"100000{local_ced_last4}"
                 if local_email and not target.email:
                     target.email = local_email
                 if local_phone and not target.phone:
@@ -929,7 +987,7 @@ def _get_or_register_dynamic_person(
                 return target
 
             # All existing candidates conflict -> spawn distinct homonym!
-            disc = local_ced or local_phone or norm(local_email.split("@", 1)[0]) or record_id or "2"
+            disc = local_ced or local_ced_last4 or local_phone or norm(local_email.split("@", 1)[0]) or record_id or "2"
             cid = f"external:{short_n}:{disc}"
             if cid in reg.persons:
                 return reg.persons[cid]
@@ -942,7 +1000,7 @@ def _get_or_register_dynamic_person(
                 surname1=s1,
                 surname2=s2,
                 gender=infer_gender(clean_name),
-                cedula=local_ced,
+                cedula=local_ced or (f"100000{local_ced_last4}" if local_ced_last4 else ""),
                 email=local_email,
                 phone=local_phone,
                 is_employee=is_employee,
@@ -964,6 +1022,8 @@ def _get_or_register_dynamic_person(
 
     if len(norm_tokens) == 1:
         cid = explicit_id or (f"external:{short_n}_{record_id}" if record_id else f"external:{short_n}")
+    elif local_ced_last4:
+        cid = explicit_id or f"external:{short_n}:{local_ced_last4}"
     else:
         cid = explicit_id or f"external:{short_n}"
     if cid in reg.persons:
@@ -978,7 +1038,7 @@ def _get_or_register_dynamic_person(
         surname1=s1,
         surname2=s2,
         gender=infer_gender(clean_name),
-        cedula=local_ced,
+        cedula=local_ced or (f"100000{local_ced_last4}" if local_ced_last4 else ""),
         email=local_email,
         phone=local_phone,
         is_employee=is_employee or cid.startswith("KP-"),
@@ -1123,6 +1183,9 @@ def _scan_unseen_names(
         trimmed = " ".join(kept_words)
         end_pos = m.start(1) + len(trimmed)
         line_txt = _line_around(text, m.start(1), end_pos)
+        forward_tail = re.split(r"\b(?:y\s+a|e\s+a|and)\b", text[end_pos : min(len(text), end_pos + 95)], maxsplit=1)[0]
+        clause_txt = text[m.start(1) : end_pos] + forward_tail
+        local_ctx_txt = clause_txt if any(_extract_local_identifiers(clause_txt)) else line_txt
         existing_cands = list(
             reg.by_full_name_norm.get(norm(trimmed), [])
             or reg.by_short_name_norm.get(norm(trimmed), [])
@@ -1131,11 +1194,11 @@ def _scan_unseen_names(
             trimmed,
             reg,
             ledger,
-            local_text=line_txt,
+            local_text=local_ctx_txt,
             record_id=ctx.record_id,
         )
         if p is not None:
-            has_local_id = any(_extract_local_identifiers(line_txt))
+            has_local_id = any(_extract_local_identifiers(local_ctx_txt))
             is_new = (p not in existing_cands) or has_local_id
             spans.append(
                 CandidateSpan(
@@ -1158,20 +1221,20 @@ def _scan_unseen_names(
             if wn in STOP_INTRO_WORDS or wn in NON_PERSON_GIVEN_WORDS:
                 break
             if idx == 0:
-                if wn not in KNOWN_GIVEN_NAMES:
+                if not (w[0].isupper() or wn in KNOWN_GIVEN_NAMES):
                     break
                 if w.islower() and wn in AMBIGUOUS_LOWERCASE_GIVEN_WORDS:
                     break
                 kept_words.append(w)
             elif idx == 1:
-                if (w[0].isupper() and (wn in KNOWN_SURNAMES or wn in KNOWN_GIVEN_NAMES)) or (
+                if w[0].isupper() or (
                     w.islower() and wn in KNOWN_SURNAMES and wn not in AMBIGUOUS_LOWERCASE_SURNAMES
                 ):
                     kept_words.append(w)
                 else:
                     break
             elif idx == 2:
-                if (w[0].isupper() and wn in KNOWN_SURNAMES) or (
+                if w[0].isupper() or (
                     w.islower() and wn in KNOWN_SURNAMES and wn not in AMBIGUOUS_LOWERCASE_SURNAMES
                 ):
                     kept_words.append(w)
@@ -1182,11 +1245,14 @@ def _scan_unseen_names(
         trimmed = " ".join(kept_words)
         end_pos = m.start(1) + len(trimmed)
         line_txt = _line_around(text, m.start(1), end_pos)
+        forward_tail = re.split(r"\b(?:y\s+a|e\s+a|and)\b", text[end_pos : min(len(text), end_pos + 95)], maxsplit=1)[0]
+        clause_txt = text[m.start(1) : end_pos] + forward_tail
+        local_ctx_txt = clause_txt if any(_extract_local_identifiers(clause_txt)) else line_txt
         p = _get_or_register_dynamic_person(
             trimmed,
             reg,
             ledger,
-            local_text=line_txt,
+            local_text=local_ctx_txt,
             record_id=ctx.record_id,
             allow_single_word=True,
         )
@@ -1205,26 +1271,40 @@ def _scan_unseen_names(
     # 4. Standalone lexicon-based detector (Title Case, MAYÚSCULAS, or unambiguous minúsculas)
     for m in RX_WORD_SEQ.finditer(text):
         raw_seq = m.group(1)
-        before_txt = text[max(0, m.start(1) - 35) : m.start(1)]
-        if RX_PLACE_PREP_BEFORE.search(before_txt):
-            continue
         words = raw_seq.split()
-        # Try longest valid prefix (up to 4 words, down to 2 words)
+        # Slide start_idx only when ALL-CAPS (`RECLAMO DE HERNANDO RIVAS MONTOYA`)
+        max_start = (len(words) - 1) if raw_seq.isupper() else 1
         matched_words: list[str] = []
-        for k in range(min(4, len(words)), 1, -1):
-            sub = words[:k]
-            if _is_valid_unseen_name_tokens(sub, require_lexicon=True):
-                matched_words = sub
+        matched_start_idx = 0
+        for s_idx in range(max_start):
+            for k in range(min(4, len(words) - s_idx), 1, -1):
+                sub = words[s_idx : s_idx + k]
+                if _is_valid_unseen_name_tokens(sub, require_lexicon=True):
+                    matched_words = sub
+                    matched_start_idx = s_idx
+                    break
+            if matched_words:
                 break
         if len(matched_words) < 2:
             continue
-        # Calculate exact end offset in `text` for `matched_words`
-        surf_match = re.match(r"^\s*(" + r"\s+".join(re.escape(w) for w in matched_words) + r")", raw_seq)
+        prefix_pat = (
+            r"^\s*(?:" + r"\s+".join(re.escape(w) for w in words[:matched_start_idx]) + r")\s+"
+            if matched_start_idx > 0
+            else r"^\s*"
+        )
+        surf_match = re.match(prefix_pat + r"(" + r"\s+".join(re.escape(w) for w in matched_words) + r")", raw_seq)
         if not surf_match:
             continue
         surf_str = surf_match.group(1)
-        end_pos = m.start(1) + len(surf_str)
-        line_txt = _line_around(text, m.start(1), end_pos)
+        start_pos = m.start(1) + surf_match.start(1)
+        end_pos = m.start(1) + surf_match.end(1)
+        before_txt = text[max(0, start_pos - 35) : start_pos]
+        if RX_PLACE_PREP_BEFORE.search(before_txt):
+            continue
+        line_txt = _line_around(text, start_pos, end_pos)
+        forward_tail = re.split(r"\b(?:y\s+a|e\s+a|and)\b", text[end_pos : min(len(text), end_pos + 95)], maxsplit=1)[0]
+        clause_txt = text[start_pos:end_pos] + forward_tail
+        local_ctx_txt = clause_txt if any(_extract_local_identifiers(clause_txt)) else line_txt
         existing_cands = list(
             reg.by_full_name_norm.get(norm(surf_str), [])
             or reg.by_short_name_norm.get(norm(surf_str), [])
@@ -1233,15 +1313,15 @@ def _scan_unseen_names(
             surf_str,
             reg,
             ledger,
-            local_text=line_txt,
+            local_text=local_ctx_txt,
             record_id=ctx.record_id,
         )
         if p is not None:
-            has_local_id = any(_extract_local_identifiers(line_txt))
+            has_local_id = any(_extract_local_identifiers(local_ctx_txt))
             is_new = (p not in existing_cands) or has_local_id
             spans.append(
                 CandidateSpan(
-                    start=m.start(1),
+                    start=start_pos,
                     end=end_pos,
                     surface=surf_str,
                     kind="short_name" if len(matched_words) <= 2 else "full_name",
@@ -1466,7 +1546,22 @@ def _disambiguate_person_candidates(
                         already_picked_on_line.setdefault(key, []).append((span.start, others[0]))
                         return others[0]
 
-    # 2. Check line for cedula, email, phone, plate, or last-4 digits of cedula/phone
+    # 2. Check immediate forward clause (`after_text`) first, then `line_text` for cedula, email, phone, plate, or last-4 digits
+    m_last4_after = re.search(r"(?:termina(?:da|do)?\s+en|ending\s+in)\s+(\d{4})\b", after_text, re.I)
+    if m_last4_after:
+        d4 = m_last4_after.group(1)
+        for c in cands:
+            if (c.cedula and c.cedula.endswith(d4)) or (c.phone and c.phone.endswith(d4)):
+                return c
+
+    for c in cands:
+        if c.cedula and c.cedula in after_text.replace(".", ""):
+            return c
+        if c.email and c.email.lower() in after_text.lower():
+            return c
+        if c.phone and c.phone in solo_digitos(after_text):
+            return c
+
     for c in cands:
         if c.cedula and c.cedula in line_text.replace(".", ""):
             return c
@@ -1552,7 +1647,10 @@ def _render_candidate_for_person(
     surf = span.surface
 
     if kind == "full_name":
-        target = ps.get("full_name") or ps.get("short_name", "")
+        if len(surf.split()) <= 2:
+            target = ps.get("short_name", "") or ps.get("full_name", "")
+        else:
+            target = ps.get("full_name") or ps.get("short_name", "")
         rep = render_name_surface(surf, target)
         return ResolvedSpan(span.start, span.end, surf, rep, person=person, attr_type="name")
 

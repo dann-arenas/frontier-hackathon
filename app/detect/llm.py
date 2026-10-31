@@ -168,6 +168,8 @@ async def extract_spans_llm(
                     model=model_used,
                     latency_ms=(time.time() - t0) * 1000.0,
                     tokens=tokens_in + tokens_out,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
                     cost_usd=cost_usd,
                     status="PASS",
                 )
