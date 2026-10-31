@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+.DS_Store
+.env
+fuentes/
+fuentes_pre_pagalo/
+sample/
+sample.zip
+output/
+output_pre_pagalo/
+state/
+state_pre_pagalo/
+logs/
+*.zip

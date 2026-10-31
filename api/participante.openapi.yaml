@@ -9,7 +9,7 @@ info:
     consistente con registros que el equipo nunca vio. Sin autenticación, accesible desde internet,
     todo en UTF-8. Secuencia del evaluador: GET /health -> POST /run -> GET /run/{job_id} hasta done
     (máximo 2 horas) -> GET /output/* -> POST /anonymize (varios lotes).
-    Los registros usan el mismo esquema normalizado que output/ (ver RULES.md, "Qué entregas").
+    Los registros usan el mismo esquema normalizado que output/ (ver ENUNCIADO.md, "Qué entregas").
 servers:
   - url: https://<tu-dominio>/v1
     description: la URL que guardas en Frontier

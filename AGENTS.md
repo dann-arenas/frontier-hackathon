@@ -144,7 +144,7 @@ Una tarea está terminada cuando `make test` pasa, `make validate` dice OK y no 
   1. `PSEUDONYM_SECRET` y `STATE_DIR/entity_ledger.json` son exactamente los mismos de la corrida anterior.
   2. `make validate` dice OK y `make test` pasa completo.
   3. `/v1/health` y `/v1/anonymize` responden desde la URL pública en menos del SLA.
-  4. El servicio corre sin suspensión por inactividad y con disco persistente (o túnel con hostname fijo, `caffeinate` y conectado a corriente).
+  4. El servicio corre en hosting público con disco persistente (`STATE_DIR`), sin suspensión por inactividad y sin depender de un computador local ni de un túnel efímero (debe permanecer activo durante todo el evento y el debrief).
 
 ## 10. Crecimiento de las fuentes
 1. Un chequeo periódico compara el tamaño de `record_index` (y su `ETag`) con la última corrida. Si cambió, emite `[SOURCES_GROWN]` y registra en `logs/incidents_log.json` los conteos por fuente (nunca valores reales).
