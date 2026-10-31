@@ -161,10 +161,17 @@ BARRIO_DEFAULT_CITY: dict[str, str] = {
     "crespo": "Cartagena",
     "getsemani": "Cartagena",
     "pie de la popa": "Cartagena",
+    "castillogrande": "Cartagena",
     "pinares": "Pereira",
     "dosquebradas": "Pereira",
     "villa olimpica": "Pereira",
     "cuba": "Pereira",
+    "circunvalar": "Pereira",
+    "alamos": "Pereira",
+    "galan": "Bogotá",
+    "santa fe": "Bogotá",
+    "boston": "Barranquilla",
+    "pance": "Cali",
 }
 
 _SORTED_OCUP_KEYS = sorted(OCUPACION_SECTOR_MAP.keys(), key=len, reverse=True)
@@ -221,7 +228,7 @@ def generalize_quasi_in_text(
         (r"\ba\s+(?:chef|baker)\b", "a hospitality professional"),
         (r"\b(?:a\s+)?(?:freelance\s+)?(?:graphic\s+designer|photographer|architect|designer)\b", "a creative industry professional"),
         (r"\b(?:a\s+)?(?:systems\s+engineer|civil\s+engineer|software\s+engineer|electrician)\b", "a technology professional"),
-        (r"\b(?:a\s+)?(?:freelance\s+)?(?:journalist|community\s+manager)\b", "a media professional"),
+        (r"\b(?:a\s+(?:freelance\s+)?|freelance\s+)(?:journalist|community\s+manager)\b", "a media professional"),
         (r"\b(?:a\s+)?(?:dentist|psychologist|physical\s+therapist|veterinarian|nurse)\b", "a healthcare professional"),
         (r"\b(?:an?\s+)?(?:accountant|accounting\s+assistant|bookkeeper)\b", "a finance professional"),
         (r"\b(?:a\s+)?(?:lawyer|attorney)\b(?!\s+(?:at|for)\s+(?:Kipu|Págalo|Pagalo))", "a legal professional"),
@@ -257,8 +264,26 @@ def generalize_quasi_in_text(
         flags=re.I,
     )
     out = re.sub(
+        r"\bllevo\s+desde\s+(?:el\s+)?(20[12]\d)\s+(con\s+(?:Kipu(?:\s+Pay)?|P[áa]galo|ustedes))\b",
+        r"llevo varios años \2",
+        out,
+        flags=re.I,
+    )
+    out = re.sub(
+        r"(\bvinculad[ao]s?\s+a\s+(?:Kipu(?:\s+Pay)?|P[áa]galo)\s+(?:en|desde)\s+(?:el\s+)?)(20[12]\d)\b",
+        r"\1hace unos años",
+        out,
+        flags=re.I,
+    )
+    out = re.sub(
         r"\b(vinculad[ao])\s+(?:en|desde)\s+(20[12]\d)\b",
         r"\1 hace unos años",
+        out,
+        flags=re.I,
+    )
+    out = re.sub(
+        r"(\bcon\s+producto\s+propio\s+desde\s+)(20[12]\d)\b",
+        r"\1hace unos años",
         out,
         flags=re.I,
     )
@@ -299,7 +324,9 @@ def generalize_quasi_in_text(
         r"El\s+Prado|El\s+Poblado|Ciudad\s+Jard[ií]n|Villa\s+Country|Lagos\s+del\s+Cacique|"
         r"Pie\s+de\s+la\s+Popa|La\s+Am[eé]rica|La\s+Candelaria|Villa\s+Ol[ií]mpica|Sotomayor|"
         r"Bocagrande|Teusaquillo|Chapinero|Cedritos|Manrique|Envigado|Itag[üu][ií]|Sabaneta|"
-        r"Granada|Cabecera|Castilla|Robledo|Laureles|Bel[eé]n|Riomar|Manga|Suba|Kennedy"
+        r"Granada|Cabecera|Castilla|Robledo|Laureles|Bel[eé]n|Riomar|Manga|Suba|Kennedy|"
+        r"Dosquebradas|Pinares|Circunvalar|[ÁA]lamos|Cuba|Chic[oó]|Gal[aá]n|Castillogrande|"
+        r"Ca[ñn]averal|Crespo|Getseman[ií]|Boston|Pance"
     )
 
     def _replace_ctx_barrio(m: re.Match[str]) -> str:
@@ -347,6 +374,10 @@ def generalize_quasi_in_text(
         (r"\bpanader[oa]\b", "profesional de gastronomía"),
         (r"\bchef\b", "profesional de gastronomía"),
         (r"\bmec[aá]nic[oa]\b", "profesional del transporte"),
+        (r"\bcomerciantes?\b", "profesional de servicios"),
+        (r"\bestilistas?\b", "profesional de servicios"),
+        (r"\bdocentes?\b", "profesional de educación"),
+        (r"\bprofesor(?:a|es|as)?\b", "profesional de educación"),
         (r"\badministrador(?:a)?\b(?!\s+de\s+(?:la\s+cuenta|sistemas|red|base))", "profesional de servicios"),
         # `contador/a` and `abogado/a`: skip corporate roles (`Contadora` in table/organigrama, `abogada senior`, `abogado externo`, `la SIC o un abogado`)
         (

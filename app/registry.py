@@ -330,7 +330,8 @@ class EntityRegistry:
             g0 = norm(p.given_name).split()[0]
             s1n = norm(p.surname1)
             if g0 and s1n:
-                p.handles.add(f"{g0}.{s1n}")
+                if p.is_employee or not p.email:
+                    p.handles.add(f"{g0}.{s1n}")
                 if len(f"{g0[0]}{s1n}") >= 4:
                     p.handles.add(f"{g0[0]}{s1n}")
         for h in list(p.handles):
@@ -407,6 +408,17 @@ class EntityRegistry:
         self.by_given_name_norm.clear()
         self.by_surname1_norm.clear()
         for p in self.persons.values():
+            if not p.is_employee and p.email and p.given_name and p.surname1:
+                own_locals = {
+                    em.split("@", 1)[0].lower().strip()
+                    for em in ([p.email] + list(p.extra_emails))
+                    if em and "@" in em
+                }
+                g0 = norm(p.given_name).split()[0]
+                s1n = norm(p.surname1)
+                synth_dot = f"{g0}.{s1n}"
+                if synth_dot not in own_locals:
+                    p.handles.discard(synth_dot)
             self._index_person(p)
 
     def is_pre_pagalo_person(self, p: PersonEntity) -> bool:

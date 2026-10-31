@@ -598,17 +598,31 @@ def test_pagalo_migration_stability(tmp_path: Path) -> None:
             "a54805b7-1562-5418-a022-4a7787985c11",
             "doc_23",
         }
+        reassigned_homonym_recs = {
+            "CL-21823": {"doc_08", "doc_17"},
+            "CL-69452": {"pqrs:PQR-2026-0544", "pqrs:PQR-2026-0550"},
+            "CL-78497": {
+                "fc11f21d-11ea-56ba-ad2d-346f1aed31f7",
+                "pqrs:PQR-2026-0488",
+                "pqrs:PQR-2026-0506",
+                "pqrs:PQR-2026-0530",
+            },
+        }
         for eid, pre_e in pre_ents.items():
             assert eid in out_ents, f"Missing pre-Pagalo entity {eid}"
             out_e = out_ents[eid]
             pre_ps = pre_e.get("pseudonyms") or {}
             out_ps = out_e.get("pseudonyms") or {}
             for k, v in pre_ps.items():
+                if k == "handle" and eid in reassigned_homonym_recs:
+                    continue
                 assert out_ps.get(k) == v, (
                     f"Pseudonym attribute {k} changed for {eid}: {v} -> {out_ps.get(k)}"
                 )
             for r_id in pre_e.get("records", []):
                 if eid == "CL-55931" and r_id in literary_maria_campaign_recs:
+                    continue
+                if eid in reassigned_homonym_recs and r_id in reassigned_homonym_recs[eid]:
                     continue
                 assert r_id in out_e.get("records", []), f"Missing record {r_id} in {eid}"
 

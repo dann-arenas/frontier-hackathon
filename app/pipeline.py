@@ -80,13 +80,15 @@ def _collect_doc_participants(d: dict[str, Any], reg: EntityRegistry) -> list[Pe
     )
     txt_norm = norm(full_txt)
 
-    # Check explicit IDs (CL-..., KP-..., PQR-..., S-26...)
-    for m in re.finditer(r"\b((?:CL|KP)-\d+|PQR-\d{4}-\d{4}|S-\d{4}-\d{2})\b", full_txt):
+    # Check explicit IDs (CL-..., PG-..., KP-..., PQR-..., S-26..., INC-...)
+    for m in re.finditer(r"\b((?:CL|PG|KP)-\d+|PQR-\d{4}-\d{4}|S-\d{4}-\d{2}|INC-\d{4}-\d{3})\b", full_txt):
         tok = m.group(1)
         p = (
             reg.persons.get(tok)
+            or reg.alias_ids.get(tok)
             or reg.by_pqr.get(tok)
             or reg.by_solicitud.get(tok)
+            or next((cand for cand in reg.persons.values() if tok in cand.incidentes), None)
         )
         if p and p not in participants:
             participants.append(p)
@@ -194,7 +196,7 @@ def _anonymize_tables_in_place(
                 p.record_hit(rid, cols["fecha_nacimiento"], "birth_iso")
                 cols["fecha_nacimiento"] = ps["birth_iso"]
             if cols.get("barrio"):
-                cols["barrio"] = generalize_table_barrio(cid, cols.get("ciudad", ""), cols["barrio"])
+                cols["barrio"] = generalize_table_barrio(p.canonical_id if p else cid, cols.get("ciudad", ""), cols["barrio"])
             if cols.get("ocupacion"):
                 cols["ocupacion"] = generalize_occupation(cols["ocupacion"])
             if cols.get("notas"):
@@ -330,6 +332,9 @@ def _anonymize_tables_in_place(
             if cols.get("agente"):
                 orig_ag = cols["agente"].strip()
                 ag_cands = reg.by_handle.get(norm(orig_ag), [])
+                emp_ag_cands = [c for c in ag_cands if c.is_employee]
+                if emp_ag_cands:
+                    ag_cands = emp_ag_cands
                 if ag_cands:
                     ag = ag_cands[0]
                     _ensure_person_pseudonyms(ag, ledger)

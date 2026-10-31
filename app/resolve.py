@@ -1524,12 +1524,13 @@ def _disambiguate_person_candidates(
         return cands[0]
 
     # Disambiguate multiple candidates (homonyms!)
-    # 1. Check immediate local window / line for explicit IDs (CL-..., KP-..., PQR-..., S-26...)
-    for m_id in re.finditer(r"\b((?:CL|KP)-\d+|PQR-\d{4}-\d{4}|S-\d{4}-\d{2}|INC-\d{4}-\d{3}|\d{4}-\d{4})\b", line_text):
+    # 1. Check immediate local window / line for explicit IDs (CL-..., PG-..., KP-..., PQR-..., S-26...)
+    for m_id in re.finditer(r"\b((?:CL|PG|KP)-\d+|PQR-\d{4}-\d{4}|S-\d{4}-\d{2}|INC-\d{4}-\d{3}|\d{4}-\d{4})\b", line_text):
         token_id = m_id.group(1)
         for c in cands:
             if (
                 token_id == c.canonical_id
+                or reg.alias_ids.get(token_id) is c
                 or token_id in c.pqrs
                 or token_id in c.solicitudes
                 or token_id in c.obligaciones
@@ -1550,6 +1551,27 @@ def _disambiguate_person_candidates(
                     if others:
                         already_picked_on_line.setdefault(key, []).append((span.start, others[0]))
                         return others[0]
+
+    # 1b. In documents, check current markdown section header/window preceding the line (without crossing `\n#`)
+    if ctx.source_type == "docs" and line_start > 0:
+        sec_start = text.rfind("\n#", 0, span.start)
+        if sec_start == -1:
+            sec_start = max(0, span.start - 260)
+        else:
+            sec_start = max(sec_start + 1, span.start - 260)
+        sec_before = text[sec_start:line_start]
+        for m_id in re.finditer(r"\b((?:CL|PG|KP)-\d+|PQR-\d{4}-\d{4}|S-\d{4}-\d{2}|INC-\d{4}-\d{3}|\d{4}-\d{4})\b", sec_before):
+            token_id = m_id.group(1)
+            for c in cands:
+                if (
+                    token_id == c.canonical_id
+                    or reg.alias_ids.get(token_id) is c
+                    or token_id in c.pqrs
+                    or token_id in c.solicitudes
+                    or token_id in c.obligaciones
+                    or token_id in c.incidentes
+                ):
+                    return c
 
     # 2. Check immediate forward clause (`after_text`) first, then `line_text` for cedula, email, phone, plate, or last-4 digits
     m_last4_after = re.search(r"(?:termina(?:da|do)?\s+en|ending\s+in)\s+(\d{4})\b", after_text, re.I)
@@ -1594,8 +1616,12 @@ def _disambiguate_person_candidates(
         if len(emp_cands) == 1:
             return emp_cands[0]
 
-    # 4. Check transaction / PSE / client cues in local window
-    if re.search(r"\b(?:el\s+pse\s+de|pse\s+recibido\s+de|cuenta\s+a\s+nombre\s+de|extracto\s+de)\b", local_window, re.I):
+    # 4. Check transaction / PSE / client cues in local window or line
+    if re.search(
+        r"\b(?:el\s+pse\s+de|pse\s+recibido\s+de|cuenta\s+a\s+nombre\s+de|extracto\s+de|educaci[oó]n\s+financiera|va\s+a\s+entrevistar|public[oó]\s+la\s+primera\s+pieza)\b",
+        line_text,
+        re.I,
+    ):
         cli_cands = [c for c in cands if not c.is_employee]
         if len(cli_cands) == 1:
             return cli_cands[0]
@@ -1619,6 +1645,8 @@ def _disambiguate_person_candidates(
                     return cli_cands[0]
 
     # 6. Check context participants (row_person, thread_client, author_entity, doc_participants)
+    if span.kind == "handle_dot" and before_text.endswith(("?ref=", "&ref=")) and ctx.author_entity in cands:
+        return ctx.author_entity
     if ctx.row_person in cands:
         return ctx.row_person
     if ctx.thread_client in cands:
