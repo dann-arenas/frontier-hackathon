@@ -22,13 +22,13 @@ def _trigger_warmup_if_needed(auth_header: str | None = None) -> str | None:
         return None
     if (OUTPUT_DIR / "entities.json").exists() or (STATE_DIR / "latest_output" / "entities.json").exists():
         return None
-    if (ROOT_DIR / "fuentes" / "record_index.json").exists():
-        return create_and_launch_job(f"local:{ROOT_DIR / 'fuentes'}", "")
     tok = SOURCES_TOKEN
     if not tok and auth_header:
         tok = auth_header.replace("Bearer ", "").replace("bearer ", "").strip()
     if SOURCES_URL and tok:
         return create_and_launch_job(SOURCES_URL.rstrip("/"), tok)
+    if (ROOT_DIR / "fuentes" / "record_index.json").exists():
+        return create_and_launch_job(f"local:{ROOT_DIR / 'fuentes'}", "")
     return None
 
 
@@ -57,10 +57,18 @@ async def _wait_for_output_file(fname: str, auth_header: str | None = None, max_
     return None
 
 
+async def _delayed_startup_warmup() -> None:
+    await asyncio.sleep(3.0)
+    _trigger_warmup_if_needed()
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    _trigger_warmup_if_needed()
-    yield
+    warmup_task = asyncio.create_task(_delayed_startup_warmup())
+    try:
+        yield
+    finally:
+        warmup_task.cancel()
 
 
 app = FastAPI(

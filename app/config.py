@@ -47,17 +47,18 @@ OPENROUTER_EVAL_KEY: str = os.getenv("OPENROUTER_EVAL_KEY", "")
 OPENROUTER_BASE_URL: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
 FAST_MODELS: list[str] = [
-    os.getenv("LLM_FAST_MODEL", "google/gemini-2.5-flash-lite"),
-    "openai/gpt-4o-mini",
+    os.getenv("LLM_FAST_MODEL", "openai/gpt-4o-mini"),
+    "google/gemini-2.5-flash-lite",
 ]
 HEAVY_MODELS: list[str] = [
-    os.getenv("LLM_HEAVY_MODEL", "google/gemini-2.5-flash"),
-    "openai/gpt-4o-mini",
+    os.getenv("LLM_HEAVY_MODEL", "openai/gpt-4o-mini"),
+    "google/gemini-2.5-flash",
 ]
 MODELS_FAST: list[str] = FAST_MODELS
 MODELS_HEAVY: list[str] = HEAVY_MODELS
 LLM_CONCURRENCY_INITIAL: int = int(os.getenv("LLM_CONCURRENCY", "16"))
-LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "15.0"))
+LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "4.0"))
+LLM_MAX_CALLS_PER_RUN: int = int(os.getenv("LLM_MAX_CALLS_PER_RUN", "2"))
 
 # Ensure directories exist
 for _d in (STATE_DIR, OUTPUT_DIR, LOGS_DIR, HTTP_CACHE_DIR, LLM_CACHE_DIR, JOBS_DIR):

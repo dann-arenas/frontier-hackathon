@@ -13,6 +13,7 @@ import httpx
 from app.config import (
     LLM_CACHE_DIR,
     LLM_CONCURRENCY_INITIAL,
+    LLM_MAX_CALLS_PER_RUN,
     LLM_TIMEOUT_SECONDS,
     MODELS_FAST,
     MODELS_HEAVY,
@@ -33,13 +34,15 @@ Devuelve SIEMPRE un objeto JSON con la llave "spans", donde cada elemento tiene:
 _TOKENS_IN_ACC = 0
 _TOKENS_OUT_ACC = 0
 _COST_USD_ACC = 0.0
+_NETWORK_CALLS_IN_RUN = 0
 
 
 def get_and_reset_llm_tokens() -> tuple[int, int]:
-    global _TOKENS_IN_ACC, _TOKENS_OUT_ACC
+    global _TOKENS_IN_ACC, _TOKENS_OUT_ACC, _NETWORK_CALLS_IN_RUN
     t_in, t_out = _TOKENS_IN_ACC, _TOKENS_OUT_ACC
     _TOKENS_IN_ACC = 0
     _TOKENS_OUT_ACC = 0
+    _NETWORK_CALLS_IN_RUN = 0
     return t_in, t_out
 
 
@@ -86,20 +89,22 @@ async def extract_spans_llm(
     if not text or not text.strip():
         return []
 
+    global _NETWORK_CALLS_IN_RUN
     cached = get_cached_llm_spans(text, tier)
-    if cached is not None:
-        return cached
+    if _NETWORK_CALLS_IN_RUN >= LLM_MAX_CALLS_PER_RUN:
+        return cached if cached is not None else []
 
     api_key = get_active_openrouter_key()
     if not api_key:
-        return []
+        return cached if cached is not None else []
 
     budget = await get_budget_status()
     if not budget.get("allow_llm", True):
-        return []
+        return cached if cached is not None else []
     if budget.get("force_fast", False):
         tier = "fast"
 
+    _NETWORK_CALLS_IN_RUN += 1
     models = list(dict.fromkeys(MODELS_HEAVY if tier == "heavy" else MODELS_FAST))
     sem = semaphore or asyncio.Semaphore(LLM_CONCURRENCY_INITIAL)
     t0 = time.time()

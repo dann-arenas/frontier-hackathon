@@ -135,6 +135,7 @@ class PersonEntity:
     originals_found: set[str] = field(default_factory=set)
     records_found: set[str] = field(default_factory=set)
     attrs_used: set[str] = field(default_factory=set)
+    has_pre_pagalo_record: bool = False
 
     def record_hit(self, record_id: str, original_surface: str | None = None, attr_type: str = "") -> None:
         if record_id:
@@ -184,6 +185,7 @@ class PersonEntity:
             "obligaciones": sorted(self.obligaciones),
             "incidentes": sorted(self.incidentes),
             "pseudonyms": self.pseudonyms,
+            "has_pre_pagalo_record": self.has_pre_pagalo_record,
         }
 
     @classmethod
@@ -223,6 +225,7 @@ class PersonEntity:
             obligaciones=set(d.get("obligaciones", [])),
             incidentes=set(d.get("incidentes", [])),
             pseudonyms=dict(d.get("pseudonyms", {})),
+            has_pre_pagalo_record=bool(d.get("has_pre_pagalo_record", False)),
         )
 
 
@@ -406,53 +409,74 @@ class EntityRegistry:
         for p in self.persons.values():
             self._index_person(p)
 
-    def assign_all_pseudonyms(self) -> None:
-        """
-        Assign deterministic pseudonyms to all registered persons in two strict passes:
-        - Pass 1: Pre-existing entities already in the ledger (e.g. Kipu Pay's pre-Págalo entities)
-          are assigned and locked in `used_names`, `used_emails`, `used_phones`, `used_cedulas`, `used_births`.
-        - Pass 2: Newly discovered entities (e.g. Págalo entities) receive new, unique pseudonyms
-          without ever shifting or colliding with Pass 1 entities.
-        """
-        real_cedulas = {p.cedula for p in self.persons.values() if p.cedula}
-        real_phones = {p.phone for p in self.persons.values() if p.phone} | {
-            ph for p in self.persons.values() for ph in p.extra_phones if ph
+    def is_pre_pagalo_person(self, p: PersonEntity) -> bool:
+        cid = p.canonical_id
+        if cid in self.ledger.entries or p.has_pre_pagalo_record:
+            return True
+        if cid.startswith("CL-"):
+            return True
+        if cid.startswith(("PG-", "PA-")):
+            return False
+        if cid.startswith("KP-"):
+            m = re.match(r"^KP-(\d+)$", cid)
+            if m and int(m.group(1)) > 100:
+                return False
+            if p.vinculacion_iso == "2026":
+                return False
+            return True
+        return False
+
+    def _register_real_identifiers_for_cids(self, cids: list[str]) -> None:
+        subset = [self.persons[cid] for cid in cids if cid in self.persons]
+        real_cedulas = {p.cedula for p in subset if p.cedula}
+        real_phones = {p.phone for p in subset if p.phone} | {
+            ph for p in subset for ph in p.extra_phones if ph
         }
-        real_emails = {p.email for p in self.persons.values() if p.email} | {
-            em for p in self.persons.values() for em in p.extra_emails if em
+        real_emails = {p.email for p in subset if p.email} | {
+            em for p in subset for em in p.extra_emails if em
         }
-        real_addrs = {p.address for p in self.persons.values() if p.address} | {
-            ad for p in self.persons.values() for ad in p.extra_addresses if ad
+        real_addrs = {p.address for p in subset if p.address} | {
+            ad for p in subset for ad in p.extra_addresses if ad
         }
-        real_births = {p.birth_iso for p in self.persons.values() if p.birth_iso}
+        real_births = {p.birth_iso for p in subset if p.birth_iso}
         self.ledger.register_real_corpus_identifiers(
             real_cedulas, real_phones, real_emails, real_addrs, real_births
         )
 
+    def assign_all_pseudonyms(self) -> None:
+        """
+        Assign deterministic pseudonyms to all registered persons in two strict passes:
+        - Pass 1: Entities with at least one pre-Págalo record (or already in the ledger)
+          are assigned and locked in `used_names`, `used_emails`, `used_phones`, `used_cedulas`, `used_births`.
+        - Pass 2: Entities appearing exclusively in Págalo records (`PG-`, `KP-191..`, `soporte-pagalo`,
+          `migracion-pagalo`, `doc_27..doc_34`) receive new, unique pseudonyms without shifting Pass 1.
+        """
         all_cids = sorted(self.persons.keys())
-        pre_cids = [cid for cid in all_cids if cid in self.ledger.entries]
-        new_cids = [cid for cid in all_cids if cid not in self.ledger.entries]
+        pre_cids = [cid for cid in all_cids if self.is_pre_pagalo_person(self.persons[cid])]
+        new_cids = [cid for cid in all_cids if not self.is_pre_pagalo_person(self.persons[cid])]
 
-        for cid in pre_cids + new_cids:
-            p = self.persons[cid]
-            orig_handle = next(iter(sorted(p.handles)), "")
-            p.pseudonyms = dict(
-                self.ledger.get_or_create(
-                    canonical_id=p.canonical_id,
-                    orig_name=p.full_name or p.short_name,
-                    gender=p.gender,
-                    orig_email=p.email,
-                    orig_phone=p.phone,
-                    orig_cedula=p.cedula,
-                    orig_address=p.address,
-                    orig_birth_iso=p.birth_iso,
-                    orig_plate=p.plate,
-                    orig_passport=p.passport,
-                    orig_account=p.account,
-                    orig_handle=orig_handle,
-                    is_employee=p.is_employee,
+        for phase_cids in (pre_cids, new_cids):
+            self._register_real_identifiers_for_cids(phase_cids)
+            for cid in phase_cids:
+                p = self.persons[cid]
+                orig_handle = next(iter(sorted(p.handles)), "")
+                p.pseudonyms = dict(
+                    self.ledger.get_or_create(
+                        canonical_id=p.canonical_id,
+                        orig_name=p.full_name or p.short_name,
+                        gender=p.gender,
+                        orig_email=p.email,
+                        orig_phone=p.phone,
+                        orig_cedula=p.cedula,
+                        orig_address=p.address,
+                        orig_birth_iso=p.birth_iso,
+                        orig_plate=p.plate,
+                        orig_passport=p.passport,
+                        orig_account=p.account,
+                        orig_handle=orig_handle,
+                        is_employee=p.is_employee,
+                    )
                 )
-            )
         self.ledger.save()
 
     def save_snapshot(self, path: Path | None = None) -> None:

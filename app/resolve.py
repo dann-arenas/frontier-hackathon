@@ -1159,7 +1159,8 @@ def _scan_unseen_names(
             )
 
     # 2. Intro / title / role cues (`Me llamo ...`, `Soy ...`, `señora ...`, `My name is ...`, etc.)
-    for m in RX_UNSEEN_INTRO.finditer(text):
+    pos_intro = 0
+    while m := RX_UNSEEN_INTRO.search(text, pos_intro):
         raw_name = m.group(1)
         words = raw_name.split()
         kept_words: list[str] = []
@@ -1179,9 +1180,11 @@ def _scan_unseen_names(
         while len(kept_words) >= 2 and not _is_valid_unseen_name_tokens(kept_words, require_lexicon=False):
             kept_words.pop()
         if len(kept_words) < 2:
+            pos_intro = m.start(1) + max(1, len(words[0]) if words else 1)
             continue
         trimmed = " ".join(kept_words)
         end_pos = m.start(1) + len(trimmed)
+        pos_intro = end_pos
         line_txt = _line_around(text, m.start(1), end_pos)
         forward_tail = re.split(r"\b(?:y\s+a|e\s+a|and)\b", text[end_pos : min(len(text), end_pos + 95)], maxsplit=1)[0]
         clause_txt = text[m.start(1) : end_pos] + forward_tail
@@ -1212,7 +1215,8 @@ def _scan_unseen_names(
             )
 
     # 3. Relative / neighbor / partner cues (`mi esposo Carlos`, `mi vecina Lucía Gómez`, `mi hermano Daniel`)
-    for m in RX_UNSEEN_RELATIVE.finditer(text):
+    pos_rel = 0
+    while m := RX_UNSEEN_RELATIVE.search(text, pos_rel):
         raw_name = m.group(1)
         words = raw_name.split()
         kept_words = []
@@ -1241,9 +1245,11 @@ def _scan_unseen_names(
                 else:
                     break
         if not kept_words:
+            pos_rel = m.start(1) + max(1, len(words[0]) if words else 1)
             continue
         trimmed = " ".join(kept_words)
         end_pos = m.start(1) + len(trimmed)
+        pos_rel = end_pos
         line_txt = _line_around(text, m.start(1), end_pos)
         forward_tail = re.split(r"\b(?:y\s+a|e\s+a|and)\b", text[end_pos : min(len(text), end_pos + 95)], maxsplit=1)[0]
         clause_txt = text[m.start(1) : end_pos] + forward_tail
@@ -1272,8 +1278,7 @@ def _scan_unseen_names(
     for m in RX_WORD_SEQ.finditer(text):
         raw_seq = m.group(1)
         words = raw_seq.split()
-        # Slide start_idx only when ALL-CAPS (`RECLAMO DE HERNANDO RIVAS MONTOYA`)
-        max_start = (len(words) - 1) if raw_seq.isupper() else 1
+        max_start = len(words) - 1
         matched_words: list[str] = []
         matched_start_idx = 0
         for s_idx in range(max_start):

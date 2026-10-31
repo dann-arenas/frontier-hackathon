@@ -17,7 +17,7 @@ from app.registry import EntityRegistry, PersonEntity
 RX_UID_MENTION = re.compile(r"<@(U[A-Z0-9]+)(?:\|[^>]+)?>")
 RX_EMAIL = re.compile(r"\b[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]*[a-zA-Z0-9]\b")
 RX_PHONE = re.compile(r"(?:\+?57[\s.\-\u00a0\u200b]*)?(?<![0-9])(3\d{2}[\s.\-\u00a0\u200b]*\d{3}[\s.\-\u00a0\u200b]*\d{4})(?![0-9])")
-RX_CEDULA_DOTS = re.compile(r"(?<![0-9.])(\d{1,2}\.\d{3}\.\d{3}(?:\.\d{3})?)(?![0-9.])")
+RX_CEDULA_DOTS = re.compile(r"(?<![0-9.])(\d{1,2}\.\d{3}\.\d{3}(?:\.\d{3})?)(?![0-9]|\.\d)")
 RX_CEDULA_PLAIN = re.compile(r"(?:(?<![0-9A-Za-z\-])|(?<=\bCC)|(?<=\bcc)|(?<=_))(\d{7,10})(?![0-9])")
 RX_CEDULA_OBFUSCATED = re.compile(
     r"(?:c[eé]dula|cc|documento|id(?:\s+no\.?)?)\s*(?:es|:|n[oú]mero)?\s*([0-9][0-9\s.,'’`´·/\-–—_\u200b\u200c\u200d\ufeff]{6,18}[0-9])",

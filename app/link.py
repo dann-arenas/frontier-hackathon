@@ -82,6 +82,8 @@ def build_and_link_registry(
                 p = PersonEntity(canonical_id=cid, entity_id=cid, is_employee=False)
             elif p.canonical_id != cid:
                 reg.alias_ids[cid] = p
+            if cid.startswith("CL-"):
+                p.has_pre_pagalo_record = True
 
             if full_name and (not p.full_name or (len(full_name.split()) > len(p.full_name.split()) and norm(short) == norm(p.short_name))):
                 p.full_name = full_name
@@ -144,6 +146,9 @@ def build_and_link_registry(
                 reg.alias_ids[eid] = p
 
             p.is_employee = True
+            m_kp = re.match(r"^KP-(\d+)$", eid)
+            if m_kp and int(m_kp.group(1)) <= 100 and cols.get("ingreso", "").strip() != "2026":
+                p.has_pre_pagalo_record = True
             if full_name and not p.full_name:
                 p.full_name = full_name
                 p.short_name = short
@@ -276,7 +281,7 @@ def build_and_link_registry(
             if len(fn_cands) == 1:
                 matched = fn_cands[0]
             else:
-                sn_cands = reg.by_short_name_norm.get(norm(u_short), [])
+                sn_cands = reg.by_short_name_norm.get(norm(u_real), []) or reg.by_short_name_norm.get(norm(u_short), [])
                 if len(sn_cands) == 1:
                     matched = sn_cands[0]
 
@@ -325,13 +330,14 @@ def build_and_link_registry(
         # Candidate pool: matching short_name (if known) or all unlinked clients (if deactivateduser)
         if u_real and u_real.lower() != "usuario desactivado" and u_handle != "deactivateduser":
             _, _, _, u_short = split_colombian_name(u_real)
+            raw_sn_pool = reg.by_short_name_norm.get(norm(u_real), []) or reg.by_short_name_norm.get(norm(u_short), [])
             cands = [
                 p
-                for p in reg.by_short_name_norm.get(norm(u_short), [])
+                for p in raw_sn_pool
                 if p.is_employee == is_emp_title
             ]
             if not cands:
-                cands = list(reg.by_short_name_norm.get(norm(u_short), []))
+                cands = list(raw_sn_pool)
         else:
             cands = [p for p in reg.persons.values() if not p.is_employee and not p.uids]
 
@@ -355,9 +361,10 @@ def build_and_link_registry(
         is_emp_title = prof.get("title", "Cliente") != "Cliente"
 
         _, _, _, u_short = split_colombian_name(u_real)
+        raw_sn_pool = reg.by_short_name_norm.get(norm(u_real), []) or reg.by_short_name_norm.get(norm(u_short), [])
         cands = [
             p
-            for p in reg.by_short_name_norm.get(norm(u_short), [])
+            for p in raw_sn_pool
             if p.is_employee == is_emp_title and not p.uids
         ]
         if len(cands) == 1:
@@ -500,6 +507,7 @@ def _register_external_person(
     phone: str = "",
     cargo: str = "",
     is_employee: bool = False,
+    is_pre_pagalo: bool = False,
 ) -> PersonEntity:
     clean_name = re.sub(r"\s+", " ", full_name).strip()
     norm_name = norm(clean_name)
@@ -514,6 +522,8 @@ def _register_external_person(
             p.extra_emails.add(em_l)
         if ph_d and ph_d != p.phone:
             p.extra_phones.add(ph_d)
+        if is_pre_pagalo:
+            p.has_pre_pagalo_record = True
         reg._index_person(p)
         return p
     if em_l and em_l in reg.by_email:
@@ -522,6 +532,8 @@ def _register_external_person(
             p.cedula = ced_d
         if ph_d and ph_d != p.phone:
             p.extra_phones.add(ph_d)
+        if is_pre_pagalo:
+            p.has_pre_pagalo_record = True
         reg._index_person(p)
         return p
     if ph_d and ph_d in reg.by_phone:
@@ -530,6 +542,8 @@ def _register_external_person(
             p.cedula = ced_d
         if em_l and em_l != p.email:
             p.extra_emails.add(em_l)
+        if is_pre_pagalo:
+            p.has_pre_pagalo_record = True
         reg._index_person(p)
         return p
 
@@ -548,6 +562,8 @@ def _register_external_person(
                     cand.email = em_l
                 if ph_d and not cand.phone:
                     cand.phone = ph_d
+                if is_pre_pagalo:
+                    cand.has_pre_pagalo_record = True
                 reg._index_person(cand)
                 return cand
         # All existing candidates with this name have a conflicting identifier -> HOMONYM!
@@ -571,6 +587,7 @@ def _register_external_person(
         email=em_l,
         phone=ph_d,
         cargo=cargo,
+        has_pre_pagalo_record=is_pre_pagalo,
     )
     return reg.add_or_update_person(p)
 
@@ -578,6 +595,8 @@ def _register_external_person(
 def _harvest_external_persons(bundle: CorpusBundle, reg: EntityRegistry) -> None:
     """Harvest third-party external persons from documents and chats."""
     for d in bundle.docs:
+        did = str(d.get("id", ""))
+        is_pre_doc = bool(re.match(r"^doc_0*(?:[1-9]|1\d|2[0-6])$", did))
         body = d.get("body", "")
         meta = d.get("metadata", {}) or {}
 
@@ -586,27 +605,27 @@ def _harvest_external_persons(bundle: CorpusBundle, reg: EntityRegistry) -> None
             r"represented\s+by\s+its\s+(?:legal\s+representative|CEO),\s*([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)+),\s*identified\s+with\s+ID\s+No\.\s*([\d.]+)",
             body,
         ):
-            _register_external_person(reg, m.group(1), cedula=m.group(2))
+            _register_external_person(reg, m.group(1), cedula=m.group(2), is_pre_pagalo=is_pre_doc)
 
         # Pattern 2: HTML comment `<!-- ... by Name (email) -->`
         for m in re.finditer(
             r"<!--[^>]*?\b(?:by|por)\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)+)\s*\(([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)\)[^>]*?-->",
             body,
         ):
-            _register_external_person(reg, m.group(1), email=m.group(2))
+            _register_external_person(reg, m.group(1), email=m.group(2), is_pre_pagalo=is_pre_doc)
 
         # Pattern 3: Auditora in markdown
         m_aud = re.search(r"\*\*Auditor[ao]:\*\*\s*([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)+)", body)
         if m_aud:
             aud_email = meta.get("auditora", "")
-            _register_external_person(reg, m_aud.group(1), email=aud_email)
+            _register_external_person(reg, m_aud.group(1), email=aud_email, is_pre_pagalo=is_pre_doc)
 
         # Pattern 4: External lawyer letter signature
         for m in re.finditer(
             r"Atentamente,\s*\n+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)+)\s*\n+Abogad[oa]\s+extern[oa]\s*\n+([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)",
             body,
         ):
-            _register_external_person(reg, m.group(1), email=m.group(2), cargo="Abogado externo")
+            _register_external_person(reg, m.group(1), email=m.group(2), cargo="Abogado externo", is_pre_pagalo=is_pre_doc)
 
         # Pattern 5: Markdown author email + Elaborado por <Name>
         auth_meta = meta.get("author", "")
@@ -621,6 +640,7 @@ def _harvest_external_persons(bundle: CorpusBundle, reg: EntityRegistry) -> None
                     m_elab.group(1),
                     email=auth_meta,
                     is_employee=auth_meta.lower().endswith(("@kipupay.co", "@pagalo.co", "@pagalo.com")),
+                    is_pre_pagalo=is_pre_doc,
                 )
 
     # Pattern 6: Family / third-party mentions in chats not yet in registry (2+ words or single given name with phone/cedula)
@@ -631,9 +651,11 @@ def _harvest_external_persons(bundle: CorpusBundle, reg: EntityRegistry) -> None
         r"\b(?:mi|su)\s+(?:hermana|hermano|esposo|esposa|vecino|vecina|mamá|mama|papá|papa|hijo|hija|tía|tío|prima|primo|novia|novio|pareja|socio|socia|cuñado|cuñada|jefe|jefa)\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,15})(?!\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)\b",
     )
     for c in bundle.chats:
+        chan = str(c.get("thread_id", "")).split(":", 1)[0]
+        is_pre_chat = chan not in ("soporte-pagalo", "migracion-pagalo")
         txt = c.get("text", "")
         for m in rx_rel_two.finditer(txt):
-            _register_external_person(reg, m.group(1))
+            _register_external_person(reg, m.group(1), is_pre_pagalo=is_pre_chat)
         for m in rx_rel_one.finditer(txt):
             given_w = m.group(1).strip()
             m_ph = RX_PHONE.search(txt)
@@ -650,5 +672,6 @@ def _harvest_external_persons(bundle: CorpusBundle, reg: EntityRegistry) -> None
                         short_name=given_w,
                         given_name=given_w,
                         phone=ph_digits,
+                        has_pre_pagalo_record=is_pre_chat,
                     )
                     reg.add_or_update_person(p_rel)

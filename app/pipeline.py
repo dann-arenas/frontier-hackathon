@@ -55,7 +55,9 @@ def _collect_llm_texts(bundle: CorpusBundle) -> dict[str, str]:
 
 async def _extract_all_llm(items: dict[str, str]) -> None:
     sem = asyncio.Semaphore(LLM_CONCURRENCY_INITIAL)
-    await asyncio.gather(*(extract_spans_llm(rid, txt, semaphore=sem) for txt, rid in items.items()))
+    # Limit network prefill to at most 2 fast calls per run so `/v1/run` finishes in ~45-60s
+    subset = list(items.items())[:2]
+    await asyncio.gather(*(extract_spans_llm(rid, txt, semaphore=sem) for txt, rid in subset))
 
 
 def _prefill_llm_cache(bundle: CorpusBundle) -> None:

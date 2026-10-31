@@ -103,12 +103,16 @@ def _job_path(job_id: str) -> Path:
     return JOBS_DIR / f"{job_id}.json"
 
 
+_ACTIVE_PROCS: dict[str, subprocess.Popen[Any]] = {}
+
+
 def read_job(job_id: str) -> dict[str, Any] | None:
     p = _job_path(job_id)
     if not p.exists():
         return None
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return {k: v for k, v in data.items() if not k.startswith("_")}
     except Exception:
         return None
 
@@ -121,15 +125,21 @@ def write_job(job_id: str, payload: dict[str, Any]) -> None:
 
 
 def create_and_launch_job(sources_url: str, token: str) -> str:
-    """Create a job state file and spawn a detached subprocess to run the pipeline."""
+    """Create a job state file and spawn a low-priority detached subprocess to run the pipeline."""
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
     now = time.time()
+    norm_url = sources_url.rstrip("/")
     for jf in sorted(JOBS_DIR.glob("job_*.json"), reverse=True):
         try:
-            if now - jf.stat().st_mtime < 120.0:
+            jid = jf.stem
+            proc = _ACTIVE_PROCS.get(jid)
+            proc_alive = proc is not None and proc.poll() is None
+            if proc_alive or (now - jf.stat().st_mtime < 300.0):
                 jdata = json.loads(jf.read_text(encoding="utf-8"))
                 if jdata.get("status") in ("queued", "running"):
-                    return jf.stem
+                    existing_url = str(jdata.get("_sources_url", "")).rstrip("/")
+                    if not existing_url or not norm_url or existing_url == norm_url:
+                        return jid
         except Exception:
             continue
 
@@ -139,16 +149,19 @@ def create_and_launch_job(sources_url: str, token: str) -> str:
         "started_at": _utc_now_iso(),
         "records": {"chats": 0, "docs": 0, "tables": 0},
         "cost": {"tokens_in": 0, "tokens_out": 0, "seconds": 0.0},
+        "_sources_url": norm_url,
     }
     write_job(job_id, initial_state)
 
-    subprocess.Popen(
-        [sys.executable, "-m", "app.jobs", job_id, sources_url, token],
+    nice_prefix = ["nice", "-n", "10"] if shutil.which("nice") else []
+    proc = subprocess.Popen(
+        nice_prefix + [sys.executable, "-m", "app.jobs", job_id, sources_url, token],
         cwd=str(ROOT_DIR),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
+    _ACTIVE_PROCS[job_id] = proc
     return job_id
 
 
@@ -165,6 +178,7 @@ def execute_job_sync(job_id: str, sources_url: str, token: str) -> dict[str, Any
         "started_at": started_at,
         "records": {"chats": 0, "docs": 0, "tables": 0},
         "cost": {"tokens_in": 0, "tokens_out": 0, "seconds": 0.0},
+        "_sources_url": sources_url.rstrip("/"),
     }
     write_job(job_id, running_state)
 
