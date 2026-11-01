@@ -1,5 +1,7 @@
 """Shared pipeline orchestrator for `/v1/run`, `make regen`, `make score-sample`, and `POST /v1/anonymize`."""
 from __future__ import annotations
+import threading
+_DEEP_COPY_LOCK = threading.Lock()
 
 import asyncio
 import copy
@@ -771,7 +773,8 @@ class LiveAnonymizer:
     def anonymize(self, source: str, records: list[dict[str, Any]]) -> dict[str, Any]:
         base_reg = self._ensure_loaded()
         # Clone registry per request so `originals_found` and `records_found` are scoped to this batch
-        batch_reg = copy.deepcopy(base_reg)
+        with _DEEP_COPY_LOCK:
+            batch_reg = copy.deepcopy(base_reg)
         batch_reg.ledger = self.ledger
         for cid in sorted(batch_reg.persons.keys()):
             p = batch_reg.persons[cid]
